@@ -1,0 +1,43 @@
+"""ORM model: a single uploaded Ghana legal document (PDF)."""
+
+from __future__ import annotations
+
+import uuid
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Integer, String, Text
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base, TimestampMixin
+
+if TYPE_CHECKING:
+    from app.db.models.legal_chunk import LegalChunk
+
+
+class LegalDocument(Base, TimestampMixin):
+    __tablename__ = "legal_documents"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    title: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    # e.g. "Constitution", "Act", "Regulation", "Case Law"
+    doc_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    # Normalized law category (constitution | act | regulation | case_law | bill | ...)
+    law_type: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    act_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    effective_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Original filename uploaded
+    source_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    # On-disk path under UPLOAD_DIR
+    storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # ingested | failed | processing
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    chunks: Mapped[list[LegalChunk]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )

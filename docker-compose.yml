@@ -1,0 +1,61 @@
+# =============================================================================
+# Legalite AI - Local development stack
+# Brings up: FastAPI app, PostgreSQL, Qdrant
+# =============================================================================
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: legalite-app
+    env_file: .env
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # Hot-reload source in dev. Remove for production-like runs.
+      - ./app:/app/app
+      - ./alembic.ini:/app/alembic.ini
+      - upload_data:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: legalite-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-legalite}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-legalite_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-legalite}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-legalite} -d ${POSTGRES_DB:-legalite}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: legalite-qdrant
+    ports:
+      - "6333:6333"   # REST
+      - "6334:6334"   # gRPC
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  upload_data:

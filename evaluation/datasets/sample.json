@@ -1,0 +1,31 @@
+[
+  {
+    "id": "rent-eviction-1",
+    "question": "Can a landlord evict a tenant without notice?",
+    "expected_law": "Rent Act",
+    "expected_section": "17",
+    "expected_law_type": "act",
+    "must_refuse": false
+  },
+  {
+    "id": "maternity-dismissal-1",
+    "question": "Can my employer dismiss me because I am pregnant?",
+    "expected_law": "Labour Act",
+    "expected_section": "57",
+    "expected_law_type": "act",
+    "must_refuse": false
+  },
+  {
+    "id": "constitution-fund-rights-1",
+    "question": "What does the Constitution say about personal liberty?",
+    "expected_law": "Constitution of Ghana",
+    "expected_article": "14",
+    "expected_law_type": "constitution",
+    "must_refuse": false
+  },
+  {
+    "id": "out-of-corpus-1",
+    "question": "What is the capital of Antarctica's largest legal jurisdiction?",
+    "must_refuse": true
+  }
+]
