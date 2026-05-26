@@ -14,6 +14,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+from app.db.enums import VisibilityScope
 
 if TYPE_CHECKING:
     from app.db.models.legal_document import LegalDocument
@@ -53,5 +54,15 @@ class LegalChunk(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Qdrant point id (UUID string) — lets us map a vector hit back to this row
     vector_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+    # Tenancy mirror (migration 0004). Duplicated from the parent document so
+    # retrieval filters never need a join on the hot path.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    visibility_scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=VisibilityScope.GLOBAL.value, index=True
+    )
+    document_origin: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     document: Mapped[LegalDocument] = relationship(back_populates="chunks")

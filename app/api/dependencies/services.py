@@ -10,6 +10,7 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.services.case_intelligence_service import CaseIntelligenceService
 from app.services.ingestion_service import IngestionService
 from app.services.qa_service import QAService
 
@@ -20,3 +21,9 @@ def get_ingestion_service(db: Session = Depends(get_db)) -> IngestionService:
 
 def get_qa_service(db: Session = Depends(get_db)) -> QAService:
     return QAService(db)
+
+
+def get_case_intelligence_service(
+    db: Session = Depends(get_db),
+) -> CaseIntelligenceService:
+    return CaseIntelligenceService(db)

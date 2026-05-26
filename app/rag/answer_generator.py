@@ -1,18 +1,33 @@
-"""Compose the final answer from retrieved passages using the OpenAI LLM.
+"""Compose the legal answer using a single structured-output LLM call.
 
-Now driven by the ConfidenceEngine: we may refuse before the LLM is invoked,
-and we re-assess after generation based on answer grounding.
+Pipeline (Phase 5 — Milestone 1):
+
+1. ``ConfidenceEngine.assess_before_generation`` gates the LLM call. If
+   retrieval is weak, we refuse without calling the model.
+2. The retrieved passages are annotated with authority tiers and the
+   prompt renders them grouped by tier so the model can apply the
+   hierarchy of authority.
+3. ONE chat-completion call with ``response_format={"type":"json_object"}``
+   returns a JSON object matching ``StructuredAnswer``.
+4. We parse the JSON defensively. Any failure ⇒ refusal; we never let
+   malformed output surface to the client.
+5. ``ConfidenceEngine.assess_final`` re-checks grounding (inline [n]
+   citations in legal_reasoning) and consistency.
+6. We synthesize the legacy ``answer`` string from the structured payload
+   so the existing /ask contract continues to work.
 """
 
 from __future__ import annotations
 
+import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from openai import OpenAI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.rag.authority import annotate as annotate_authority
 from app.rag.confidence_engine import (
     Confidence,
     ConfidenceAssessment,
@@ -26,6 +41,7 @@ from app.rag.prompt_builder import (
     build_user_prompt,
 )
 from app.rag.retriever import RetrievedPassage
+from app.schemas.qa import StructuredAnswer, StructuredCitation
 
 logger = get_logger(__name__)
 
@@ -38,6 +54,9 @@ class GeneratedAnswer:
     used_passages: list[RetrievedPassage]
     refused: bool
     reasoning_summary: str
+    structured: StructuredAnswer = field(
+        default_factory=lambda: StructuredAnswer(direct_answer="")
+    )
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
@@ -48,9 +67,10 @@ class AnswerGenerator:
         self,
         *,
         confidence_engine: ConfidenceEngine | None = None,
+        client: OpenAI | None = None,
     ) -> None:
         settings = get_settings()
-        self._client = OpenAI(api_key=settings.openai_api_key)
+        self._client = client or OpenAI(api_key=settings.openai_api_key)
         self._model = settings.openai_llm_model
         self._confidence = confidence_engine or ConfidenceEngine()
 
@@ -61,6 +81,9 @@ class AnswerGenerator:
         *,
         memory: list[MemoryTurn] | None = None,
     ) -> GeneratedAnswer:
+        # Stamp authority metadata on each passage before the prompt sees them.
+        annotate_authority(passages)
+
         pre = self._confidence.assess_before_generation(passages)
         if pre.refused:
             return _refusal(passages, pre, reason=pre.reason)
@@ -71,6 +94,7 @@ class AnswerGenerator:
             completion = self._client.chat.completions.create(
                 model=self._model,
                 temperature=0.1,
+                response_format={"type": "json_object"},
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": user_prompt},
@@ -81,39 +105,202 @@ class AnswerGenerator:
             return _refusal(passages, pre, reason="LLM call failed")
         latency_ms = int((time.perf_counter() - t0) * 1000)
 
-        content = (completion.choices[0].message.content or "").strip()
+        raw_content = (completion.choices[0].message.content or "").strip()
         usage = completion.usage
         tokens_in = getattr(usage, "prompt_tokens", 0) or 0
         tokens_out = getattr(usage, "completion_tokens", 0) or 0
 
-        if REFUSAL_TEXT in content:
+        structured, parse_error = _parse_structured(raw_content)
+        if structured is None:
+            logger.warning(
+                "answer.parse_failed",
+                model=self._model,
+                reason=parse_error,
+                preview=raw_content[:200],
+            )
+            return _refusal(
+                passages,
+                pre,
+                reason=f"LLM output not valid structured JSON: {parse_error}",
+                latency_ms=latency_ms,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+            )
+
+        # Model explicitly refused → honor it and keep arrays empty.
+        if REFUSAL_TEXT in structured.direct_answer:
             return GeneratedAnswer(
-                answer=_ensure_disclaimer(content),
+                answer=_synthesize_legacy_answer(_empty_refusal(structured.direct_answer)),
                 confidence="low",
                 confidence_score=pre.score,
                 used_passages=[],
                 refused=True,
                 reasoning_summary="LLM declined: insufficient evidence in provided passages",
+                structured=_empty_refusal(structured.direct_answer),
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 latency_ms=latency_ms,
             )
 
-        final = self._confidence.assess_final(passages, content, pre)
+        # Build the legacy answer string before the post-LLM grounding check
+        # so the grounding scan sees the same [n] markers the model produced.
+        legacy_answer = _synthesize_legacy_answer(structured)
+
+        final = self._confidence.assess_final(passages, legacy_answer, pre)
         if final.refused:
-            return _refusal(passages, final, reason=final.reason)
+            return _refusal(
+                passages,
+                final,
+                reason=final.reason,
+                latency_ms=latency_ms,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+            )
 
         return GeneratedAnswer(
-            answer=_ensure_disclaimer(content),
+            answer=legacy_answer,
             confidence=final.level,
             confidence_score=final.score,
             used_passages=passages,
             refused=False,
             reasoning_summary=final.reason,
+            structured=structured,
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             latency_ms=latency_ms,
         )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_structured(raw: str) -> tuple[StructuredAnswer | None, str | None]:
+    """Defensive JSON → StructuredAnswer. Never raises."""
+    if not raw:
+        return None, "empty response"
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return None, f"json decode: {e.msg}"
+    if not isinstance(data, dict):
+        return None, "top-level JSON is not an object"
+
+    # Coerce lists / strings rather than reject — the model may emit minor
+    # shape drift (e.g. a string when a list is expected). We never invent
+    # content; we only normalize types.
+    def _str(key: str) -> str:
+        v = data.get(key)
+        return v if isinstance(v, str) else ""
+
+    def _ints(key: str) -> list[int]:
+        v = data.get(key) or []
+        if not isinstance(v, list):
+            return []
+        out: list[int] = []
+        for item in v:
+            if isinstance(item, int):
+                out.append(item)
+            elif isinstance(item, str) and item.strip().isdigit():
+                out.append(int(item.strip()))
+        return out
+
+    def _cites(key: str) -> list[StructuredCitation]:
+        v = data.get(key) or []
+        if not isinstance(v, list):
+            return []
+        out: list[StructuredCitation] = []
+        for item in v:
+            if not isinstance(item, dict):
+                continue
+            try:
+                out.append(
+                    StructuredCitation(
+                        citation_id=int(item.get("citation_id", 0)) or 0,
+                        summary=str(item.get("summary") or "").strip(),
+                        law_name=str(item.get("law_name") or "").strip(),
+                        section=str(item.get("section") or "").strip(),
+                        article=str(item.get("article") or "").strip(),
+                        case_title=str(item.get("case_title") or "").strip(),
+                        court=str(item.get("court") or "").strip(),
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+        # Drop any citation row that didn't carry a usable passage id.
+        return [c for c in out if c.citation_id > 0]
+
+    direct = _str("direct_answer").strip()
+    if not direct:
+        return None, "direct_answer missing"
+
+    return (
+        StructuredAnswer(
+            direct_answer=direct,
+            applicable_law=_cites("applicable_law"),
+            relevant_public_cases=_cites("relevant_public_cases"),
+            firm_similar_cases=_cites("firm_similar_cases"),
+            legal_reasoning=_str("legal_reasoning"),
+            confidence_assessment=_str("confidence_assessment"),
+            citations=_ints("citations"),
+        ),
+        None,
+    )
+
+
+def _synthesize_legacy_answer(s: StructuredAnswer) -> str:
+    """Render the structured answer back into the v1/v2 ``answer`` string.
+
+    The legacy contract was: a free-text answer ending with the disclaimer.
+    We rebuild that shape so existing /ask clients see no breaking change.
+    """
+    parts: list[str] = [s.direct_answer.strip()]
+    if s.legal_reasoning.strip():
+        parts.append(s.legal_reasoning.strip())
+
+    citation_lines: list[str] = []
+    for row in s.applicable_law:
+        bits: list[str] = []
+        if row.law_name:
+            bits.append(row.law_name)
+        if row.section:
+            bits.append(f"s.{row.section}")
+        if row.article:
+            bits.append(f"art.{row.article}")
+        label = " | ".join(bits) or row.summary or ""
+        if label:
+            citation_lines.append(f"- [{row.citation_id}] {label}")
+    for row in s.relevant_public_cases:
+        label = row.case_title or row.summary or ""
+        if label:
+            citation_lines.append(f"- [{row.citation_id}] {label}")
+    for row in s.firm_similar_cases:
+        label = row.case_title or row.summary or ""
+        if label:
+            citation_lines.append(f"- [{row.citation_id}] (firm) {label}")
+
+    if citation_lines:
+        parts.append("Citations:\n" + "\n".join(citation_lines))
+    if s.confidence_assessment.strip():
+        parts.append(f"Confidence note: {s.confidence_assessment.strip()}")
+    parts.append(DISCLAIMER)
+    return "\n\n".join(parts).strip()
+
+
+def _empty_refusal(refusal_text: str) -> StructuredAnswer:
+    """Build the canonical empty structured answer used on refusal."""
+    return StructuredAnswer(
+        direct_answer=refusal_text or REFUSAL_TEXT,
+        applicable_law=[],
+        relevant_public_cases=[],
+        firm_similar_cases=[],
+        legal_reasoning=(
+            "No passages in the supplied Ghana legal materials supported a confident answer."
+        ),
+        confidence_assessment="Insufficient evidence — system refused to speculate.",
+        citations=[],
+    )
 
 
 def _refusal(
@@ -121,7 +308,11 @@ def _refusal(
     assessment: ConfidenceAssessment,
     *,
     reason: str,
+    latency_ms: int = 0,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
 ) -> GeneratedAnswer:
+    structured = _empty_refusal(REFUSAL_TEXT)
     return GeneratedAnswer(
         answer=f"{REFUSAL_TEXT}\n\n{DISCLAIMER}",
         confidence="low",
@@ -129,8 +320,8 @@ def _refusal(
         used_passages=[],
         refused=True,
         reasoning_summary=reason,
+        structured=structured,
+        latency_ms=latency_ms,
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
     )
-
-
-def _ensure_disclaimer(content: str) -> str:
-    return content if DISCLAIMER in content else f"{content.rstrip()}\n\n{DISCLAIMER}"

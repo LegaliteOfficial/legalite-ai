@@ -11,6 +11,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+from app.db.enums import VisibilityScope
 
 
 class ChatSession(Base, TimestampMixin):
@@ -21,6 +22,18 @@ class ChatSession(Base, TimestampMixin):
     )
     title: Mapped[str | None] = mapped_column(String(256), nullable=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+
+    # Tenancy (migration 0004). Both nullable for backward-compat with the
+    # legacy /ask flow that has no tenant context.
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    visibility_scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=VisibilityScope.GLOBAL.value
+    )
 
     messages: Mapped[list[ChatMessage]] = relationship(
         back_populates="session",

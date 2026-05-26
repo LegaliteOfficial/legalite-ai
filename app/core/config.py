@@ -61,6 +61,12 @@ class Settings(BaseSettings):
     memory_window_turns: int = 6
     memory_max_tokens: int = 2000
 
+    # Case-law intelligence
+    case_llm_enrichment_enabled: bool | None = None  # None = auto-detect (off in tests)
+    case_similarity_top_k: int = 8
+    case_similarity_topic_weight: float = 0.35
+    case_similarity_semantic_weight: float = 0.65
+
     # --- Qdrant ------------------------------------------------------------
     qdrant_url: str = "http://qdrant:6333"
     qdrant_api_key: str | None = None

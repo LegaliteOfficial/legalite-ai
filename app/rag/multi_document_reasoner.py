@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.tenant_context import TenantContext
 from app.rag.hybrid_retriever import HybridRetriever
 from app.rag.reranker import BaseReranker
 from app.rag.retriever import RetrievedPassage
@@ -59,7 +60,9 @@ class MultiDocumentReasoner:
         self._reranker = reranker
         self._buckets = buckets or DEFAULT_LAW_BUCKETS
 
-    def gather(self, question: str) -> CrossDocResult:
+    def gather(
+        self, question: str, *, tenant: TenantContext | None = None
+    ) -> CrossDocResult:
         settings = get_settings()
         per_bucket = max(2, settings.hybrid_topk_fused // max(1, len(self._buckets)))
 
@@ -71,6 +74,7 @@ class MultiDocumentReasoner:
                 question,
                 law_type=law_type,
                 top_k_final=per_bucket,
+                tenant=tenant,
             )
             label = law_type or "unspecified"
             bucket_counts[label] = result.n_fused

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
+from app.db.enums import ConfidentialityLevel, VisibilityScope
 from app.db.models.legal_chunk import LegalChunk
 from app.db.models.legal_document import LegalDocument
 
@@ -36,6 +37,10 @@ class ChunkRecord:
     act_number: str | None = None
     effective_year: int | None = None
     legal_topic: str | None = None
+    # Tenancy mirror — must match the parent document's scope.
+    organization_id: uuid.UUID | None = None
+    visibility_scope: str = VisibilityScope.GLOBAL.value
+    document_origin: str | None = None
 
 
 class DocumentRepository:
@@ -55,6 +60,11 @@ class DocumentRepository:
         law_type: str | None = None,
         act_number: str | None = None,
         effective_year: int | None = None,
+        organization_id: uuid.UUID | None = None,
+        visibility_scope: str = VisibilityScope.GLOBAL.value,
+        document_origin: str | None = None,
+        confidentiality_level: str = ConfidentialityLevel.PUBLIC.value,
+        uploaded_by_user_id: uuid.UUID | None = None,
     ) -> LegalDocument:
         doc = LegalDocument(
             title=title,
@@ -66,6 +76,11 @@ class DocumentRepository:
             law_type=law_type,
             act_number=act_number,
             effective_year=effective_year,
+            organization_id=organization_id,
+            visibility_scope=visibility_scope,
+            document_origin=document_origin,
+            confidentiality_level=confidentiality_level,
+            uploaded_by_user_id=uploaded_by_user_id,
         )
         self._db.add(doc)
         self._db.flush()
@@ -111,6 +126,9 @@ class DocumentRepository:
                 act_number=c.act_number,
                 effective_year=c.effective_year,
                 legal_topic=c.legal_topic,
+                organization_id=c.organization_id,
+                visibility_scope=c.visibility_scope,
+                document_origin=c.document_origin,
             )
             for c in chunks
         ]
@@ -131,28 +149,52 @@ class DocumentRepository:
         query: str,
         top_k: int,
         law_type: str | None = None,
+        *,
+        organization_id: uuid.UUID | None = None,
     ) -> list[tuple[LegalChunk, float]]:
         """Full-text keyword search using the generated `content_tsv` column.
 
         Returns rows ordered by ts_rank_cd descending, paired with their score.
-        `law_type` optionally narrows the corpus (constitution/act/regulation/case_law).
+
+        Tenant scope (must mirror the Qdrant filter exactly so vector and
+        keyword paths return the same eligible set):
+
+        - ``organization_id is None``: GLOBAL chunks only.
+        - ``organization_id`` set: GLOBAL chunks OR chunks belonging to that
+          org (with ``visibility_scope = tenant_private``).
+
+        Implemented with parameterized SQL so an arbitrary tenant_id can
+        never break out of the filter via injection.
         """
         if not query.strip():
             return []
 
-        # Raw SQL keeps the query simple and lets us use `plainto_tsquery` directly.
-        sql = """
-            SELECT id, ts_rank_cd(content_tsv, q) AS score
-              FROM legal_chunks, plainto_tsquery('english', :q) q
-             WHERE content_tsv @@ q
-               {law_type_filter}
-             ORDER BY score DESC
-             LIMIT :limit
-        """.format(law_type_filter="AND law_type = :law_type" if law_type else "")
-
         params: dict[str, object] = {"q": query, "limit": top_k}
+        clauses: list[str] = ["content_tsv @@ q"]
+
         if law_type:
+            clauses.append("law_type = :law_type")
             params["law_type"] = law_type
+
+        # Tenant boundary — enforced even when the chunks/payloads in this
+        # database predate the tenancy migration (the backfill set every
+        # legacy row to visibility_scope='global').
+        if organization_id is None:
+            clauses.append("visibility_scope = 'global'")
+        else:
+            clauses.append(
+                "(visibility_scope = 'global' "
+                "OR (visibility_scope = 'tenant_private' "
+                "AND organization_id = :organization_id))"
+            )
+            params["organization_id"] = str(organization_id)
+
+        sql = (
+            "SELECT id, ts_rank_cd(content_tsv, q) AS score "
+            "FROM legal_chunks, plainto_tsquery('english', :q) q "
+            "WHERE " + " AND ".join(clauses) + " "
+            "ORDER BY score DESC LIMIT :limit"
+        )
 
         rows = self._db.execute(text(sql), params).all()
         if not rows:

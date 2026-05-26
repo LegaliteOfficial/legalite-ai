@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
+from app.db.enums import ConfidentialityLevel, VisibilityScope
 
 if TYPE_CHECKING:
     from app.db.models.legal_chunk import LegalChunk
@@ -36,6 +37,23 @@ class LegalDocument(Base, TimestampMixin):
     # ingested | failed | processing
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Tenancy + classification (migration 0004)
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
+    visibility_scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=VisibilityScope.GLOBAL.value, index=True
+    )
+    document_origin: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
+    confidentiality_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=ConfidentialityLevel.PUBLIC.value
+    )
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
 
     chunks: Mapped[list[LegalChunk]] = relationship(
         back_populates="document",

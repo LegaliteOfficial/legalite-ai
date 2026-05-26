@@ -21,6 +21,7 @@ import structlog
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
+from app.core.tenant_context import TenantContext
 from app.db.repositories.chat_repository import ChatRepository
 from app.ingestion.embedding_service import EmbeddingService
 from app.rag.answer_generator import AnswerGenerator, GeneratedAnswer
@@ -60,14 +61,23 @@ class QAService:
         self._generator = generator or AnswerGenerator()
         self._memory = LegalMemory(ChatRepository(db))
 
-    def ask(self, question: str, session_id: str | None = None) -> AskResponse:
+    def ask(
+        self,
+        question: str,
+        session_id: str | None = None,
+        *,
+        tenant: TenantContext | None = None,
+    ) -> AskResponse:
         t0 = time.perf_counter()
         sid = self._memory.get_or_create_session(session_id)
-        with structlog.contextvars.bound_contextvars(session_id=str(sid)):
+        with structlog.contextvars.bound_contextvars(
+            session_id=str(sid),
+            tenant_org=str(tenant.organization_id) if tenant and tenant.organization_id else None,
+        ):
             memory = self._memory.load_recent(sid)
             self._memory.append_user(sid, question)
 
-            cross = self._reasoner.gather(question)
+            cross = self._reasoner.gather(question, tenant=tenant)
             passages = cross.passages
 
             result: GeneratedAnswer = self._generator.generate(
@@ -112,6 +122,7 @@ class QAService:
                 sources_used=sources,
                 reasoning_summary=result.reasoning_summary,
                 session_id=str(sid),
+                structured_answer=result.structured,
             )
 
     def get_or_create_session(self, session_id: str | None) -> uuid.UUID:

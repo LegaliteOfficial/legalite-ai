@@ -37,6 +37,17 @@ class RetrievedPassage:
     source: str = "vector"  # vector | keyword | hybrid
     # Rerank score (set by the Reranker; None if rerank disabled)
     rerank_score: float | None = None
+    # Tenancy provenance — preserved across RRF so the structured /ask
+    # response can group passages by source_scope (public vs private).
+    organization_id: str | None = None
+    visibility_scope: str = "global"
+    document_origin: str | None = None
+    # Authority hierarchy (set by ``app.rag.authority.annotate``). When the
+    # passage hasn't been classified yet these stay at their defaults — never
+    # rely on them being correct without a prior ``annotate()`` call.
+    legal_authority_rank: int = 0
+    source_scope: str = "global"  # global | tenant_private
+    authority_tier: str | None = None
 
     @classmethod
     def from_hit(cls, hit: VectorHit) -> RetrievedPassage:
@@ -59,6 +70,9 @@ class RetrievedPassage:
             effective_year=p.get("effective_year"),
             legal_topic=p.get("legal_topic"),
             source="vector",
+            organization_id=p.get("organization_id"),
+            visibility_scope=p.get("visibility_scope") or "global",
+            document_origin=p.get("document_origin"),
         )
 
 

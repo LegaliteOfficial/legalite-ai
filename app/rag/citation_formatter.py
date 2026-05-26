@@ -76,6 +76,8 @@ def _passage_to_citation(p: RetrievedPassage, relevance: float) -> Citation:
         subsection=p.subsection or "",
         page_number=p.page_start,
         relevance=round(relevance, 4),
+        source_scope=p.source_scope or "global",  # type: ignore[arg-type]
+        document_origin=p.document_origin,
     )
 
 
@@ -91,6 +93,8 @@ def _passage_to_source(p: RetrievedPassage) -> SourceUsed:
         page=_format_page(p.page_start, p.page_end),
         excerpt=excerpt,
         score=round(_passage_relevance(p), 4),
+        source_scope=p.source_scope or "global",  # type: ignore[arg-type]
+        document_origin=p.document_origin,
     )
 
 

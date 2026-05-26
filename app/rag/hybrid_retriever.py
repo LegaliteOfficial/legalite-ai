@@ -26,11 +26,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.tenant_context import TenantContext
 from app.db.models.legal_chunk import LegalChunk
 from app.db.repositories.document_repository import DocumentRepository
 from app.ingestion.embedding_service import EmbeddingService
 from app.rag.retriever import RetrievedPassage
-from app.vector_store.qdrant_client import QdrantVectorStore
+from app.vector_store.qdrant_client import QdrantVectorStore, build_tenant_filter
 
 logger = get_logger(__name__)
 
@@ -64,14 +65,28 @@ class HybridRetriever:
         *,
         law_type: str | None = None,
         top_k_final: int | None = None,
+        tenant: TenantContext | None = None,
     ) -> HybridResult:
+        """Hybrid retrieve scoped to the tenant boundary.
+
+        ``tenant`` is the authenticated context for this request. When
+        ``None`` (legacy /ask path), we fall back to anonymous scope —
+        GLOBAL chunks only. The same filter shape is applied to both the
+        Qdrant search and the Postgres FTS query so the two retrievers
+        operate over an identical eligible set; a mismatch would let
+        keyword search surface private chunks the vector path filtered out.
+        """
         settings = get_settings()
         topk_v = settings.hybrid_topk_vector
         topk_k = settings.hybrid_topk_keyword
         topk_f = top_k_final or settings.hybrid_topk_fused
 
-        vector_passages = self._vector_search(question, topk_v)
-        keyword_passages = self._keyword_search(question, topk_k, law_type=law_type)
+        org_id = tenant.organization_id if tenant else None
+
+        vector_passages = self._vector_search(question, topk_v, organization_id=org_id)
+        keyword_passages = self._keyword_search(
+            question, topk_k, law_type=law_type, organization_id=org_id
+        )
 
         fused = _reciprocal_rank_fusion(
             [vector_passages, keyword_passages],
@@ -85,6 +100,7 @@ class HybridRetriever:
             keyword=len(keyword_passages),
             fused=len(fused),
             law_type=law_type,
+            tenant_org=str(org_id) if org_id else None,
         )
         return HybridResult(
             passages=fused,
@@ -95,15 +111,32 @@ class HybridRetriever:
 
     # ---- internals ---------------------------------------------------------
 
-    def _vector_search(self, question: str, top_k: int) -> list[RetrievedPassage]:
+    def _vector_search(
+        self,
+        question: str,
+        top_k: int,
+        *,
+        organization_id: uuid.UUID | None,
+    ) -> list[RetrievedPassage]:
         query_vec = self._embeddings.embed_query(question)
-        hits = self._vector_store.search(query_vec, top_k=top_k)
+        qfilter = build_tenant_filter(organization_id=organization_id)
+        hits = self._vector_store.search(query_vec, top_k=top_k, query_filter=qfilter)
         return [RetrievedPassage.from_hit(h) for h in hits]
 
     def _keyword_search(
-        self, question: str, top_k: int, law_type: str | None
+        self,
+        question: str,
+        top_k: int,
+        law_type: str | None,
+        *,
+        organization_id: uuid.UUID | None,
     ) -> list[RetrievedPassage]:
-        rows = self._repo.keyword_search(question, top_k=top_k, law_type=law_type)
+        rows = self._repo.keyword_search(
+            question,
+            top_k=top_k,
+            law_type=law_type,
+            organization_id=organization_id,
+        )
         return [_chunk_to_passage(c, score=s) for c, s in rows]
 
 
@@ -126,6 +159,9 @@ def _chunk_to_passage(chunk: LegalChunk, score: float) -> RetrievedPassage:
         effective_year=chunk.effective_year,
         legal_topic=chunk.legal_topic,
         source="keyword",
+        organization_id=str(chunk.organization_id) if chunk.organization_id else None,
+        visibility_scope=chunk.visibility_scope,
+        document_origin=chunk.document_origin,
     )
 
 
