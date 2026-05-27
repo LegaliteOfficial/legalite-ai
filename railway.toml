@@ -1,0 +1,27 @@
+# Railway service config for the legalite-ai web tier.
+#
+# This forces Railway to use the project's hand-written Dockerfile instead
+# of Railpack's auto-builder. Railpack would otherwise miss the OS-level
+# dependencies we need (tesseract-ocr for OCR fallback, libpq5 for psycopg)
+# AND fail to locate the entry point because app/main.py is inside a
+# package, not at the repo root.
+#
+# For the Arq worker, create a SECOND Railway service from the same repo
+# and override its start command — see "Worker service" in BACKUP.md /
+# the deployment notes.
+
+[build]
+builder      = "DOCKERFILE"
+dockerfilePath = "docker/Dockerfile"
+
+[deploy]
+# Run migrations BEFORE the web process starts. ``alembic upgrade head`` is
+# idempotent, so running it on every cold start is safe and means a fresh
+# replica never serves traffic against a stale schema.
+startCommand              = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath           = "/health"
+healthcheckTimeout        = 30
+restartPolicyType         = "ON_FAILURE"
+restartPolicyMaxRetries   = 3
+# Railway injects $PORT at runtime; uvicorn must bind to it, NOT to a fixed
+# port. The 8000 in docker-compose.yml is for local dev only.
