@@ -21,12 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-# Generous timeout + retry budget — llama-index pulls heavy transitive deps
-# (nltk, tiktoken, sentencepiece, etc.) and the 15-second pip default chokes
-# on slow / flaky links. BuildKit cache mount keeps wheels around across
-# rebuilds so a transient network blip costs minutes, not a full re-download.
-RUN --mount=type=cache,id=legalite-pip,target=/root/.cache/pip \
-    pip install --prefix=/install \
+# Generous timeout + retry budget — llama-index pulls heavy transitive
+# deps (nltk, tiktoken, sentencepiece, etc.) and pip's 15-second default
+# chokes on slow / flaky links. The cache mount that used to live here
+# was removed because Railway's Metal builder rejects unprefixed cache
+# ids; local Docker Desktop builds still benefit from --retries.
+RUN pip install --prefix=/install \
         --timeout 600 \
         --retries 5 \
         -r requirements.txt
