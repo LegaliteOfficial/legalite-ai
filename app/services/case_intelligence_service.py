@@ -20,6 +20,7 @@ from app.db.models.legal_case import LegalCase
 from app.db.repositories.case_repository import CaseRepository
 from app.ingestion.embedding_service import EmbeddingService
 from app.rag.case_similarity_engine import CaseSimilarityEngine, CaseSimilarityHit
+from app.core.config import get_settings
 from app.schemas.cases import (
     CaseCompareResponse,
     CaseComparisonField,
@@ -29,8 +30,11 @@ from app.schemas.cases import (
     CaseSimilarResponse,
     CaseSummarizeResponse,
     CaseSummaryOut,
+    CitationGraphNode,
+    CitationGraphResponse,
     PartyOut,
 )
+from app.services.citation_resolution_service import get_citation_graph
 from app.vector_store.qdrant_client import QdrantVectorStore
 
 logger = get_logger(__name__)
@@ -145,6 +149,29 @@ class CaseIntelligenceService:
 
     # ---- /cases/compare ----------------------------------------------------
 
+    def citation_graph(
+        self,
+        case_id: uuid.UUID,
+        *,
+        tenant: TenantContext | None = None,
+    ) -> CitationGraphResponse | None:
+        org_id = tenant.organization_id if tenant else None
+        case = self._repo.get_case(case_id, organization_id=org_id)
+        if case is None:
+            return None
+        settings = get_settings()
+        graph = get_citation_graph(
+            self._db,
+            case_id,
+            organization_id=org_id,
+            max_chain_depth=settings.citation_resolution_chain_depth,
+        )
+        return CitationGraphResponse(
+            cites=[_graph_node(n) for n in graph["cites"]],
+            cited_by=[_graph_node(n) for n in graph["cited_by"]],
+            precedent_chain=[_graph_node(n) for n in graph["precedent_chain"]],
+        )
+
     def compare(
         self,
         case_ids: Sequence[uuid.UUID],
@@ -210,6 +237,17 @@ def _to_hit_out(hit: CaseSimilarityHit) -> CaseSimilarHitOut:
         topic_overlap=hit.topic_overlap,
         shared_topics=hit.shared_topics,
         matched_chunks=hit.matched_chunks,
+    )
+
+
+def _graph_node(n: object) -> CitationGraphNode:
+    """Adapter from the resolver's GraphNode dataclass to the API schema."""
+    return CitationGraphNode(
+        case_id=getattr(n, "case_id"),
+        case_title=getattr(n, "case_title"),
+        case_number=getattr(n, "case_number", None),
+        court=getattr(n, "court", None),
+        confidence=float(getattr(n, "confidence", 0.0)),
     )
 
 

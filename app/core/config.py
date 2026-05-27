@@ -66,6 +66,53 @@ class Settings(BaseSettings):
     case_similarity_top_k: int = 8
     case_similarity_topic_weight: float = 0.35
     case_similarity_semantic_weight: float = 0.65
+    # Citation resolution — minimum confidence to auto-link an edge.
+    citation_resolution_threshold: float = 0.6
+    citation_resolution_chain_depth: int = 4
+
+    # Query planner
+    query_planner_llm_fallback_enabled: bool = False
+    query_planner_min_heuristic_confidence: float = 0.5
+
+    # Observability
+    prometheus_enabled: bool = True
+    otel_enabled: bool = False
+    otel_service_name: str = "legalite-ai"
+    otel_exporter_otlp_endpoint: str | None = None
+
+    # Background ingestion
+    redis_url: str = "redis://redis:6379/0"
+    ingestion_queue_name: str = "legalite_ingest"
+    ingestion_max_retries: int = 3
+    ingestion_job_timeout_seconds: int = 1800
+
+    # Service-to-service authentication (legalite-backend → legalite-ai).
+    # When set, the gateway must sign tenant headers with HMAC-SHA256 and
+    # include x-legalite-signature + x-legalite-timestamp. When None
+    # (default), the trust-the-network model from Phase 4 applies — useful
+    # for local dev, NOT acceptable in production.
+    legalite_gateway_secret: str | None = None
+    gateway_signature_max_skew_seconds: int = 300
+
+    # Rate limiting (slowapi).
+    rate_limit_enabled: bool = True
+    rate_limit_ask: str = "30/minute"
+    rate_limit_upload: str = "10/minute"
+    rate_limit_default: str = "120/minute"
+
+    # OCR fallback for scanned PDFs (audit Item 5).
+    # When ``None`` (default), the parser tries to import pytesseract on first
+    # use and silently disables OCR if the import fails. Explicit ``true``
+    # raises on failure (use this in prod). Explicit ``false`` disables OCR
+    # even when pytesseract is installed (useful in tests).
+    ocr_enabled: bool | None = None
+    # Below this many characters extracted from a page we treat it as scanned
+    # and try OCR. Empirically, ~40 chars is a header line on a real PDF page.
+    ocr_min_text_chars: int = 40
+    # Tesseract DPI for rendering — higher = better OCR but slower.
+    ocr_render_dpi: int = 200
+    ocr_lang: str = "eng"
+    ocr_timeout_seconds: int = 60
 
     # --- Qdrant ------------------------------------------------------------
     qdrant_url: str = "http://qdrant:6333"

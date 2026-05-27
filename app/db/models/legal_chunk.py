@@ -50,6 +50,10 @@ class LegalChunk(Base, TimestampMixin):
 
     page_start: Mapped[int | None] = mapped_column(Integer, nullable=True)
     page_end: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Character offsets within the chunk's page text — populated by the
+    # chunker (Phase 5 M9). NULL for chunks ingested before migration 0005.
+    start_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_char: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     content: Mapped[str] = mapped_column(Text, nullable=False)
     # Qdrant point id (UUID string) — lets us map a vector hit back to this row

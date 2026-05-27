@@ -21,6 +21,7 @@ import uuid
 from dataclasses import dataclass
 
 from app.core.config import get_settings
+from app.core.tenant_context import TenantContext
 from app.db.models.chat import ChatMessage
 from app.db.repositories.chat_repository import ChatRepository
 from app.rag.prompt_builder import MemoryTurn
@@ -38,17 +39,38 @@ class LegalMemory:
     def __init__(self, repo: ChatRepository) -> None:
         self._repo = repo
 
-    def get_or_create_session(self, session_id: str | None) -> uuid.UUID:
+    def get_or_create_session(
+        self,
+        session_id: str | None,
+        *,
+        tenant: TenantContext | None = None,
+    ) -> uuid.UUID:
+        """Resolve to a session UUID, scoped to the requesting tenant.
+
+        Audit rule (P0-1): a caller can only resume a session that
+        belongs to their own ``organization_id``. If they hand us a
+        session_id that exists under a different org (or anonymous), we
+        treat it as missing and mint a fresh session under the current
+        tenant — never leak the other org's session.
+        """
+        org_id = tenant.organization_id if tenant else None
+        user_id = tenant.user_id if tenant else None
+
         if session_id:
             try:
                 sid = uuid.UUID(session_id)
             except ValueError as e:
                 raise ValueError(f"invalid session_id: {session_id}") from e
-            if self._repo.get_session(sid) is None:
-                # Create with provided id is not supported; create new + return new id
-                return self._repo.create_session().id
-            return sid
-        return self._repo.create_session().id
+            existing = self._repo.get_session(sid, organization_id=org_id)
+            if existing is not None:
+                return sid
+            # session_id was bogus or belongs to a different tenant — start fresh.
+            return self._repo.create_session(
+                organization_id=org_id, user_id=user_id
+            ).id
+        return self._repo.create_session(
+            organization_id=org_id, user_id=user_id
+        ).id
 
     def load_recent(self, session_id: uuid.UUID) -> MemoryContext:
         settings = get_settings()

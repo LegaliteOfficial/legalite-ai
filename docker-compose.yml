@@ -1,6 +1,6 @@
 # =============================================================================
 # Legalite AI - Local development stack
-# Brings up: FastAPI app, PostgreSQL, Qdrant
+# Brings up: FastAPI app, PostgreSQL, Qdrant, Redis, Arq worker
 # =============================================================================
 
 services:
@@ -22,9 +22,32 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
+      redis:
+        condition: service_healthy
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    restart: unless-stopped
+
+  worker:
+    # Phase 5 M4 — Arq worker for background PDF ingestion. Shares the same
+    # image as the app so library versions can't drift between the two.
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: legalite-worker
+    env_file: .env
+    volumes:
+      - ./app:/app/app
+      - upload_data:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    command: ["arq", "app.jobs.worker.WorkerSettings"]
     restart: unless-stopped
 
   postgres:
@@ -55,7 +78,23 @@ services:
       - qdrant_data:/qdrant/storage
     restart: unless-stopped
 
+  redis:
+    # Phase 5 M4 — broker for the Arq ingestion worker.
+    image: redis:7-alpine
+    container_name: legalite-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   qdrant_data:
   upload_data:
+  redis_data:

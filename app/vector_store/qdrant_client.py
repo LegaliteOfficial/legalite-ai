@@ -16,6 +16,7 @@ from qdrant_client.http import models as qm
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import qdrant_failures
 
 logger = get_logger(__name__)
 
@@ -49,16 +50,25 @@ class VectorPayload:
     visibility_scope: str = "global"
     document_origin: str | None = None
     confidentiality_level: str | None = None
+    # Phase 5 M9 — character offsets for UI source highlighting.
+    start_char: int | None = None
+    end_char: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        # Keep visibility_scope even when its value equals the default — we
-        # rely on it being present for the filter, so dropping it would risk
-        # a chunk being unfilterable.
+        # Note (audit fix): VectorPayload is declared @dataclass(slots=True),
+        # which means it has __slots__ and NO __dict__. The previous
+        # implementation iterated self.__dict__ and crashed at runtime
+        # the first time anything actually wrote to Qdrant — the integration
+        # test that exercises real ingestion is what caught it. Iterate the
+        # declared dataclass fields instead; works regardless of slots.
+        from dataclasses import fields
+
         out: dict[str, Any] = {}
-        for k, v in self.__dict__.items():
+        for f in fields(self):
+            v = getattr(self, f.name)
             if v is None:
                 continue
-            out[k] = v
+            out[f.name] = v
         # Belt-and-braces: ensure visibility_scope is always in the payload.
         out.setdefault("visibility_scope", "global")
         return out
@@ -85,15 +95,42 @@ class QdrantVectorStore:
     # ---- collection lifecycle ---------------------------------------------
 
     def ensure_collection(self) -> None:
-        """Create the collection if it does not exist. Idempotent."""
+        """Create the collection (and required payload indexes) if missing.
+
+        Idempotent. The payload indexes are mandatory for tenant filtering
+        — without them Qdrant rejects any ``Filter`` that references those
+        fields with HTTP 400. The integration suite caught this bug; before
+        the fix, every tenant-aware retrieval in production would have
+        failed once a real Qdrant filter was applied.
+        """
         existing = {c.name for c in self._client.get_collections().collections}
-        if self._collection in existing:
-            return
-        logger.info("qdrant.creating_collection", name=self._collection, dim=self._dim)
-        self._client.create_collection(
-            collection_name=self._collection,
-            vectors_config=qm.VectorParams(size=self._dim, distance=qm.Distance.COSINE),
-        )
+        if self._collection not in existing:
+            logger.info("qdrant.creating_collection", name=self._collection, dim=self._dim)
+            self._client.create_collection(
+                collection_name=self._collection,
+                vectors_config=qm.VectorParams(size=self._dim, distance=qm.Distance.COSINE),
+            )
+
+        # Always (re)assert the payload indexes — cheap when they exist.
+        # These four fields are referenced by every retrieval filter in the
+        # codebase (see build_tenant_filter + HybridRetriever law_type narrows).
+        for field_name in ("visibility_scope", "organization_id", "law_type", "document_origin"):
+            try:
+                self._client.create_payload_index(
+                    collection_name=self._collection,
+                    field_name=field_name,
+                    field_schema=qm.PayloadSchemaType.KEYWORD,
+                )
+            except Exception:  # noqa: BLE001
+                # Already-exists errors come back as 400 with a descriptive
+                # body; we treat all "couldn't create" outcomes as idempotent
+                # success. A genuinely-broken index will surface as a search
+                # error later, which qdrant_failures{search} captures.
+                logger.debug(
+                    "qdrant.payload_index_skip",
+                    field=field_name,
+                    collection=self._collection,
+                )
 
     # ---- writes ------------------------------------------------------------
 
@@ -146,13 +183,17 @@ class QdrantVectorStore:
         ALL chunks regardless of tenancy — used only by the legacy /ask
         path and the global-corpus operator tooling.
         """
-        results = self._client.search(
-            collection_name=self._collection,
-            query_vector=query_vector,
-            limit=top_k,
-            with_payload=True,
-            query_filter=query_filter,
-        )
+        try:
+            results = self._client.search(
+                collection_name=self._collection,
+                query_vector=query_vector,
+                limit=top_k,
+                with_payload=True,
+                query_filter=query_filter,
+            )
+        except Exception:
+            qdrant_failures.labels(operation="search").inc()
+            raise
         return [
             VectorHit(
                 score=float(r.score),

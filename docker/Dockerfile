@@ -32,10 +32,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     APP_HOME=/app
 
-# Runtime-only system deps
+# Runtime-only system deps. tesseract-ocr is the OCR engine used by the
+# pytesseract Python wrapper for scanned-PDF fallback (Phase 5.1 / audit Item 5).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libpq5 \
         curl \
+        tesseract-ocr \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --system app && useradd --system --gid app --home ${APP_HOME} app
 

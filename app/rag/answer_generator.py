@@ -27,6 +27,7 @@ from openai import OpenAI
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import llm_latency, observe
 from app.rag.authority import annotate as annotate_authority
 from app.rag.confidence_engine import (
     Confidence,
@@ -91,15 +92,16 @@ class AnswerGenerator:
         user_prompt = build_user_prompt(question, passages, memory=memory)
         t0 = time.perf_counter()
         try:
-            completion = self._client.chat.completions.create(
-                model=self._model,
-                temperature=0.1,
-                response_format={"type": "json_object"},
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-            )
+            with observe(llm_latency):
+                completion = self._client.chat.completions.create(
+                    model=self._model,
+                    temperature=0.1,
+                    response_format={"type": "json_object"},
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
         except Exception:
             logger.exception("answer.llm_failed", model=self._model)
             return _refusal(passages, pre, reason="LLM call failed")

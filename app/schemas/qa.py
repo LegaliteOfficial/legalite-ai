@@ -9,6 +9,18 @@ from pydantic import BaseModel, Field
 Confidence = Literal["high", "medium", "low"]
 
 
+class CitationSpan(BaseModel):
+    """Character offsets used by the UI to highlight the source PDF span.
+
+    ``start_char`` / ``end_char`` are zero-indexed character offsets within
+    the page text of the citation's ``page_number``. Both NULL when the
+    chunk was ingested before migration 0005.
+    """
+
+    start_char: int | None = None
+    end_char: int | None = None
+
+
 class Citation(BaseModel):
     # Legacy fields — kept for backward compatibility with v1 clients
     law: str = ""
@@ -28,6 +40,8 @@ class Citation(BaseModel):
     # v3 (Phase 5 M1): source provenance — global vs tenant-private.
     source_scope: Literal["global", "tenant_private"] = "global"
     document_origin: str | None = None
+    # Phase 5 M9 — exact span for UI highlighting.
+    citation_span: CitationSpan | None = None
 
 
 class SourceUsed(BaseModel):
@@ -101,3 +115,7 @@ class AskResponse(BaseModel):
     session_id: str | None = None
     # v3 (Phase 5 M1): structured answer surface. Always present.
     structured_answer: StructuredAnswer | None = None
+    # v3.1 (Phase 5 M2): which intent the query planner inferred. Surfaced for
+    # observability only — does not change retrieval semantics for clients.
+    query_intent: str | None = None
+    query_intent_confidence: float | None = None

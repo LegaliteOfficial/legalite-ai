@@ -24,6 +24,7 @@ from app.schemas.cases import (
     CaseSimilarResponse,
     CaseSummarizeRequest,
     CaseSummarizeResponse,
+    CitationGraphResponse,
 )
 from app.services.case_intelligence_service import CaseIntelligenceService
 
@@ -101,3 +102,20 @@ async def compare_cases(
             detail="At least two cases must exist with the supplied ids",
         )
     return result
+
+
+@router.get("/{case_id}/citations", response_model=CitationGraphResponse)
+async def case_citation_graph(
+    case_id: uuid.UUID,
+    service: CaseIntelligenceService = Depends(get_case_intelligence_service),
+    tenant: TenantContext = Depends(get_optional_tenant_context),
+) -> CitationGraphResponse:
+    """Outgoing/incoming citation edges + greedy precedent chain.
+
+    Tenant-scoped: only edges whose endpoints are visible to the
+    requesting org appear in the response.
+    """
+    graph = service.citation_graph(case_id, tenant=tenant)
+    if graph is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Case not found")
+    return graph

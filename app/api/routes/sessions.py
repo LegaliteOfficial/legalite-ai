@@ -1,7 +1,10 @@
 """Chat session management.
 
-POST /sessions      — create a fresh chat session
-GET  /sessions/{id} — list messages in chronological order
+Tenant-scoped (audit fix P0-1). A session created by Firm A is invisible
+to Firm B and to anonymous callers — they get a 404. Anonymous sessions
+(created without tenant headers) remain visible to other anonymous
+callers; this preserves the legacy /ask + /sessions flow used by the
+current mobile/web client.
 """
 
 from __future__ import annotations
@@ -12,6 +15,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.api.dependencies.tenant import get_optional_tenant_context
+from app.core.tenant_context import TenantContext
 from app.db.repositories.chat_repository import ChatRepository
 from app.db.session import get_db
 
@@ -34,20 +39,29 @@ class SessionDetail(BaseModel):
 
 
 @router.post("", response_model=CreateSessionResponse, status_code=status.HTTP_201_CREATED)
-async def create_session(db: Session = Depends(get_db)) -> CreateSessionResponse:
+async def create_session(
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_optional_tenant_context),
+) -> CreateSessionResponse:
     repo = ChatRepository(db)
-    sess = repo.create_session()
+    sess = repo.create_session(
+        organization_id=tenant.organization_id,
+        user_id=tenant.user_id,
+    )
     db.commit()
     return CreateSessionResponse(session_id=sess.id)
 
 
 @router.get("/{session_id}", response_model=SessionDetail)
 async def get_session(
-    session_id: uuid.UUID, db: Session = Depends(get_db)
+    session_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    tenant: TenantContext = Depends(get_optional_tenant_context),
 ) -> SessionDetail:
     repo = ChatRepository(db)
-    sess = repo.get_session(session_id)
+    sess = repo.get_session(session_id, organization_id=tenant.organization_id)
     if sess is None:
+        # 404 (not 403) so cross-tenant probing can't enumerate session IDs.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="session not found"
         )

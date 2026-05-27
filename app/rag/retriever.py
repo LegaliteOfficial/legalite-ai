@@ -48,6 +48,9 @@ class RetrievedPassage:
     legal_authority_rank: int = 0
     source_scope: str = "global"  # global | tenant_private
     authority_tier: str | None = None
+    # Phase 5 M9 — character offsets for UI source highlighting.
+    start_char: int | None = None
+    end_char: int | None = None
 
     @classmethod
     def from_hit(cls, hit: VectorHit) -> RetrievedPassage:
@@ -73,6 +76,8 @@ class RetrievedPassage:
             organization_id=p.get("organization_id"),
             visibility_scope=p.get("visibility_scope") or "global",
             document_origin=p.get("document_origin"),
+            start_char=p.get("start_char"),
+            end_char=p.get("end_char"),
         )
 
 

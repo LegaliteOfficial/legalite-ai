@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import record_upload
 from app.core.tenant_context import TenantContext
 from app.db.enums import (
     GLOBAL_ONLY_ORIGINS,
@@ -38,6 +39,7 @@ from app.ingestion.citation_extractor import CitationExtractor
 from app.ingestion.embedding_service import EmbeddingService
 from app.ingestion.legal_chunker import LegalChunker
 from app.ingestion.pdf_parser import ParsedPdf, PdfParser
+from app.services.citation_resolution_service import CitationResolutionService
 from app.vector_store.qdrant_client import QdrantVectorStore, VectorPayload
 
 logger = get_logger(__name__)
@@ -153,6 +155,8 @@ class IngestionService:
                     visibility_scope=visibility_scope.value,
                     document_origin=origin_str,
                     confidentiality_level=confidentiality_level.value,
+                    start_char=c.start_char,
+                    end_char=c.end_char,
                 )
                 for c in chunks
             ]
@@ -178,6 +182,8 @@ class IngestionService:
                     organization_id=org_id,
                     visibility_scope=visibility_scope.value,
                     document_origin=origin_str,
+                    start_char=c.start_char,
+                    end_char=c.end_char,
                 )
                 for c, pid in zip(chunks, point_ids, strict=True)
             ]
@@ -197,12 +203,14 @@ class IngestionService:
 
             self._repo.mark_document_status(document_id, "ingested")
             self._db.commit()
+            record_upload(scope=visibility_scope.value, outcome="ingested")
             logger.info(
                 "ingestion.completed",
                 document_id=str(document_id),
                 chunks=len(records),
                 pages=parsed.page_count,
                 law_type=detected_law_type,
+                visibility_scope=visibility_scope.value,
             )
             return document_id, len(records)
         except Exception as e:
@@ -210,6 +218,7 @@ class IngestionService:
             # Reopen a session-friendly state: mark failure in its own transaction.
             self._repo.mark_document_status(document_id, "failed", notes=str(e)[:500])
             self._db.commit()
+            record_upload(scope=visibility_scope.value, outcome="failed")
             logger.exception("ingestion.failed", document_id=str(document_id))
             raise
 
@@ -243,7 +252,7 @@ class IngestionService:
             citations = []
 
         try:
-            self._case_repo.create_case(
+            case = self._case_repo.create_case(
                 CaseRecord(
                     document_id=document_id,
                     case_title=meta.case_title,
@@ -271,6 +280,16 @@ class IngestionService:
                     ],
                 )
             )
+            # Phase 5 M5 — try to resolve outgoing citation edges against
+            # whatever cases are already in the corpus. Best-effort; failure
+            # never breaks ingestion.
+            try:
+                resolver = CitationResolutionService(self._db)
+                resolver.resolve_for_case(case.id)
+            except Exception:
+                logger.exception(
+                    "citation.resolution.failed", document_id=str(document_id)
+                )
             logger.info(
                 "case.persisted",
                 document_id=str(document_id),

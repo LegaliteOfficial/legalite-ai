@@ -32,3 +32,20 @@ python-dotenv==1.0.1
 httpx==0.28.1
 tenacity==9.0.0
 structlog==24.4.0
+
+# --- Phase 5: observability ---
+prometheus-client==0.21.1
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+
+# --- Phase 5: background ingestion ---
+arq==0.26.3
+redis==5.2.1
+
+# --- Phase 5.1: rate limiting (audit Item 6) ---
+slowapi==0.1.9
+
+# --- Phase 5.1: OCR fallback (audit Item 5) ---
+# Tesseract binary is installed in the Dockerfile (apt-get install tesseract-ocr).
+pytesseract==0.3.13
+Pillow==11.0.0

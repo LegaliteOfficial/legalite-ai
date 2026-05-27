@@ -162,6 +162,8 @@ def _chunk_to_passage(chunk: LegalChunk, score: float) -> RetrievedPassage:
         organization_id=str(chunk.organization_id) if chunk.organization_id else None,
         visibility_scope=chunk.visibility_scope,
         document_origin=chunk.document_origin,
+        start_char=chunk.start_char,
+        end_char=chunk.end_char,
     )
 
 

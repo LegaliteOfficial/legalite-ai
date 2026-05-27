@@ -113,3 +113,20 @@ class CaseListResponse(BaseModel):
     cases: list[CaseSummaryOut]
     limit: int
     offset: int
+
+
+# ---- GET /cases/{id}/citations ---------------------------------------------
+
+
+class CitationGraphNode(BaseModel):
+    case_id: uuid.UUID
+    case_title: str
+    case_number: str | None = None
+    court: str | None = None
+    confidence: float
+
+
+class CitationGraphResponse(BaseModel):
+    cites: list[CitationGraphNode] = Field(default_factory=list)
+    cited_by: list[CitationGraphNode] = Field(default_factory=list)
+    precedent_chain: list[CitationGraphNode] = Field(default_factory=list)

@@ -1,56 +1,70 @@
 """Admin-only routes for the GLOBAL Ghana legal corpus.
 
-``POST /admin/upload-law`` is the new home for ingesting Constitution / Acts
-/ Regulations / public case law. It's the same pipeline as the legacy
-``/upload-law``, but role-gated: only ``owner`` or ``admin`` headers from
-the legalite-backend gateway pass the dependency.
+``POST /admin/upload-law`` ingests Constitution / Acts / Regulations /
+public case law. Phase 5 M4 made this endpoint async — it now returns a
+``job_id`` immediately and the actual ingestion runs in the Arq worker.
+When Redis / Arq is unavailable the dispatcher transparently falls back
+to inline ingestion so dev / single-binary deploys still work.
 
-The legacy route stays alive (in ``documents.py``) so the current mobile/web
-client keeps working; new operator tooling should target this endpoint.
+The legacy ``/upload-law`` endpoint (in documents.py) is unchanged.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from sqlalchemy.orm import Session
 
-from app.api.dependencies.services import get_ingestion_service
 from app.api.dependencies.tenant import require_admin
 from app.core.config import get_settings
+from app.core.rate_limit import limiter
 from app.core.tenant_context import TenantContext
-from app.db.enums import DocumentOrigin, VisibilityScope
-from app.schemas.documents import UploadLawResponse
-from app.services.ingestion_service import IngestionService
+from app.db.enums import (
+    GLOBAL_ONLY_ORIGINS,
+    DocumentOrigin,
+    VisibilityScope,
+)
+from app.db.session import get_db
+from app.schemas.jobs import JobEnqueuedResponse
+from app.services.upload_dispatcher import dispatch_upload
+from app.db.enums import ConfidentialityLevel
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+_UPLOAD_LIMIT = get_settings().rate_limit_upload
 
 
 @router.post(
     "/upload-law",
-    response_model=UploadLawResponse,
-    status_code=status.HTTP_201_CREATED,
+    response_model=JobEnqueuedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit(_UPLOAD_LIMIT)
 async def admin_upload_law(
+    request: Request,
     file: UploadFile = File(..., description="Ghana legal PDF (Constitution, Act, Regulation, Case)"),
     title: str = Form(..., min_length=2, max_length=512),
     doc_type: str = Form(..., description="Constitution | Act | Regulation | Case Law | ..."),
-    document_origin: DocumentOrigin | None = Form(
+    document_origin: Optional[DocumentOrigin] = Form(
         default=None,
         description=(
-            "Optional explicit classification. If omitted, the chunker's auto-detected "
-            "law_type is used. Must be one of: constitution | act | regulation | "
-            "case_law | precedent | judgement."
+            "Optional explicit classification. Must be a global origin: "
+            "constitution | act | regulation | case_law | precedent | judgement."
         ),
     ),
     admin_ctx: TenantContext = Depends(require_admin),
-    service: IngestionService = Depends(get_ingestion_service),
-) -> UploadLawResponse:
-    """Ingest a global / authoritative legal document. Admin-only.
+    db: Session = Depends(get_db),
+) -> JobEnqueuedResponse:
+    """Enqueue a global / authoritative legal document for ingestion."""
+    if document_origin is not None and document_origin not in GLOBAL_ONLY_ORIGINS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"document_origin={document_origin.value!r} is tenant-private. "
+                "GLOBAL uploads must use a global-only origin."
+            ),
+        )
 
-    The uploaded user_id is recorded on the document for audit, but
-    ``organization_id`` is left NULL — global documents belong to nobody.
-    """
     settings = get_settings()
     if not file.filename or Path(file.filename).suffix.lower() != ".pdf":
         raise HTTPException(
@@ -67,31 +81,19 @@ async def admin_upload_law(
         )
 
     try:
-        document_id, chunks_indexed = service.ingest_pdf(
+        return await dispatch_upload(
+            db,
             file_bytes=content,
             original_filename=file.filename,
             title=title,
             doc_type=doc_type,
             visibility_scope=VisibilityScope.GLOBAL,
             document_origin=document_origin,
-            tenant=admin_ctx,  # only uploaded_by_user_id is used; org_id is forced None
+            confidentiality_level=ConfidentialityLevel.PUBLIC,
+            tenant=admin_ctx,
         )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Ingestion failed: {exc}",
-        ) from exc
-
-    return UploadLawResponse(
-        document_id=document_id,
-        title=title,
-        doc_type=doc_type,
-        page_count=0,
-        chunks_indexed=chunks_indexed,
-        status="ingested" if chunks_indexed > 0 else "failed",
-    )

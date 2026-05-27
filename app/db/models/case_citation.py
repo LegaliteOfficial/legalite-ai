@@ -9,9 +9,11 @@ edge in the citation graph.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -47,6 +49,13 @@ class CaseCitation(Base, TimestampMixin):
     cited_raw_text: Mapped[str] = mapped_column(Text, nullable=False)
     cited_case_title: Mapped[str | None] = mapped_column(String(512), nullable=True)
     cited_reporter: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Phase 5 M5 — populated by CitationResolutionService.
+    resolution_confidence: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=4, scale=3), nullable=True
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     citing_case: Mapped[LegalCase] = relationship(
         back_populates="citing",

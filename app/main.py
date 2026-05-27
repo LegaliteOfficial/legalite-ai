@@ -13,6 +13,8 @@ from app.api.routes import (
     cases,
     documents,
     health,
+    jobs,
+    metrics,
     private_documents,
     qa,
     sessions,
@@ -20,6 +22,8 @@ from app.api.routes import (
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.observability import ObservabilityMiddleware
+from app.core.rate_limit import configure_rate_limiting, limiter
+from app.core.service_auth import signature_required
 
 
 @asynccontextmanager
@@ -49,6 +53,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    logger = get_logger(__name__)
     app = FastAPI(
         title="Legalite AI",
         description=(
@@ -72,6 +77,19 @@ def create_app() -> FastAPI:
     # Observability: request-id + structured per-request logging
     app.add_middleware(ObservabilityMiddleware)
 
+    # Rate limiting (audit Item 6). Per-tenant via x-organization-id, falling
+    # back to client IP for anonymous traffic.
+    configure_rate_limiting(app)
+
+    if not signature_required():
+        logger.warning(
+            "service_auth.unsigned_mode_enabled",
+            note=(
+                "LEGALITE_GATEWAY_SECRET is not set — gateway headers are "
+                "trusted at face value. Only safe behind a private network."
+            ),
+        )
+
     app.include_router(health.router)
     app.include_router(documents.router)
     app.include_router(qa.router)
@@ -79,6 +97,8 @@ def create_app() -> FastAPI:
     app.include_router(cases.router)
     app.include_router(admin.router)
     app.include_router(private_documents.router)
+    app.include_router(jobs.router)
+    app.include_router(metrics.router)
     return app
 
 

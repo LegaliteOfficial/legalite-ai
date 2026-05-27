@@ -138,6 +138,12 @@ class LegalChunk:
     act_number: str | None = None
     effective_year: int | None = None
     legal_topic: str | None = None
+    # Phase 5 M9 — character offsets within page_start / page_end.
+    # Populated best-effort by locating the chunk content in the source
+    # pages after emission. NULL when the chunk text cannot be located
+    # (e.g. heavy whitespace normalization).
+    start_char: int | None = None
+    end_char: int | None = None
 
 
 @dataclass(slots=True)
@@ -222,13 +228,81 @@ class LegalChunker:
                 cursor.buffer.append(line)
 
         flush()
-        return [c for c in chunks if c.content]
+        emitted = [c for c in chunks if c.content]
+        _attach_spans(emitted, parsed)
+        return emitted
 
 
 def _attach_doc_meta(chunk: LegalChunk, meta: dict[str, object]) -> None:
     chunk.law_type = meta.get("law_type")  # type: ignore[assignment]
     chunk.act_number = meta.get("act_number")  # type: ignore[assignment]
     chunk.effective_year = meta.get("effective_year")  # type: ignore[assignment]
+
+
+def _attach_spans(chunks: list[LegalChunk], parsed: ParsedPdf) -> None:
+    """Locate each emitted chunk's text inside the source page text.
+
+    The chunker normalizes line whitespace, so the chunk content does not
+    always match the raw page byte-for-byte. We try two strategies in order:
+
+    1. Exact ``str.find`` of the leading & trailing characters within the
+       chunk's ``page_start`` / ``page_end`` text.
+    2. Locate the first non-whitespace word of the chunk in the start
+       page; locate the last non-whitespace word in the end page.
+
+    On failure we leave the offsets None — the UI falls back to page-only
+    highlighting. We track a per-page cursor so two chunks that share the
+    same opening words still resolve to distinct offsets.
+    """
+    pages_by_number: dict[int, str] = {p.page_number: p.text for p in parsed.pages}
+    cursor_by_page: dict[int, int] = {}
+
+    for chunk in chunks:
+        if not chunk.content:
+            continue
+        start_text = _leading_anchor(chunk.content)
+        end_text = _trailing_anchor(chunk.content)
+        if chunk.page_start is not None:
+            page_text = pages_by_number.get(chunk.page_start, "")
+            start = _find_from(page_text, start_text, cursor_by_page.get(chunk.page_start, 0))
+            if start >= 0:
+                chunk.start_char = start
+                cursor_by_page[chunk.page_start] = start + len(start_text)
+        if chunk.page_end is not None:
+            page_text = pages_by_number.get(chunk.page_end, "")
+            # End offset = (position of end_text) + len(end_text). If the
+            # chunk fits on one page and end_text isn't found again, fall
+            # back to start_char + len(content) capped to the page length.
+            search_from = (
+                chunk.start_char
+                if chunk.start_char is not None and chunk.page_end == chunk.page_start
+                else cursor_by_page.get(chunk.page_end, 0)
+            )
+            idx = _find_from(page_text, end_text, search_from)
+            if idx >= 0:
+                chunk.end_char = idx + len(end_text)
+            elif chunk.start_char is not None and chunk.page_end == chunk.page_start:
+                chunk.end_char = min(
+                    chunk.start_char + len(chunk.content), len(page_text)
+                )
+
+
+def _leading_anchor(content: str, length: int = 40) -> str:
+    """First N visible characters of the chunk — used as a forward-search anchor."""
+    stripped = content.lstrip()
+    return stripped[:length]
+
+
+def _trailing_anchor(content: str, length: int = 40) -> str:
+    stripped = content.rstrip()
+    return stripped[-length:]
+
+
+def _find_from(haystack: str, needle: str, start: int) -> int:
+    """``str.find`` with a minimum start cursor; -1 if not found at or after."""
+    if not haystack or not needle:
+        return -1
+    return haystack.find(needle, max(0, start))
 
 
 def _detect_level(line: str) -> tuple[str, str] | None:

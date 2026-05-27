@@ -41,6 +41,9 @@ class ChunkRecord:
     organization_id: uuid.UUID | None = None
     visibility_scope: str = VisibilityScope.GLOBAL.value
     document_origin: str | None = None
+    # Phase 5 M9 — character offsets within source page text.
+    start_char: int | None = None
+    end_char: int | None = None
 
 
 class DocumentRepository:
@@ -129,6 +132,8 @@ class DocumentRepository:
                 organization_id=c.organization_id,
                 visibility_scope=c.visibility_scope,
                 document_origin=c.document_origin,
+                start_char=c.start_char,
+                end_char=c.end_char,
             )
             for c in chunks
         ]

@@ -11,7 +11,7 @@ v2 changes:
 from __future__ import annotations
 
 from app.rag.retriever import RetrievedPassage
-from app.schemas.qa import Citation, SourceUsed
+from app.schemas.qa import Citation, CitationSpan, SourceUsed
 
 _EXCERPT_MAX_CHARS = 320
 
@@ -62,6 +62,9 @@ def format_sources(passages: list[RetrievedPassage]) -> list[SourceUsed]:
 
 def _passage_to_citation(p: RetrievedPassage, relevance: float) -> Citation:
     page = _format_page(p.page_start, p.page_end)
+    span: CitationSpan | None = None
+    if p.start_char is not None or p.end_char is not None:
+        span = CitationSpan(start_char=p.start_char, end_char=p.end_char)
     return Citation(
         law=p.law or "",
         article=p.article or "",
@@ -78,6 +81,7 @@ def _passage_to_citation(p: RetrievedPassage, relevance: float) -> Citation:
         relevance=round(relevance, 4),
         source_scope=p.source_scope or "global",  # type: ignore[arg-type]
         document_origin=p.document_origin,
+        citation_span=span,
     )
 
 
