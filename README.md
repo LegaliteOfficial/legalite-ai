@@ -1142,6 +1142,53 @@ consistency problem. Executable helpers live in
 `backup_uploads.sh`. None of them have been wired into a scheduler in
 this deployment yet — that's the operator's responsibility.
 
+## Service authentication (HMAC)
+
+See [docs/SERVICE_AUTH.md](docs/SERVICE_AUTH.md) for the wire protocol,
+the drop-in TypeScript signer for `legalite-backend`, the rotation
+procedure, and negative-path verification. Set
+`LEGALITE_GATEWAY_SECRET` identically on `legalite-ai` (this service)
+and `legalite-backend` to enable signature verification.
+
+```bash
+# Produce signed curl headers for testing — same primitive the backend
+# must use in its TypeScript signer.
+export LEGALITE_GATEWAY_SECRET="…"
+python -m scripts.sign_request \
+    --org-id  $(uuidgen) \
+    --user-id $(uuidgen) \
+    --role    admin \
+    --format  curl
+```
+
+## Migrating Postgres providers (Qdrant reconciliation)
+
+When you swap Postgres providers (Neon → Supabase, etc.), every Qdrant
+point still references the old database's `document_id`. The new
+Postgres has no matching rows, so those points are orphaned. Three
+scripts cover diagnosis → cleanup → re-ingest:
+
+```bash
+# 1. Diagnose: how many points have orphan document_ids?
+python -m scripts.qdrant_orphans
+
+# 2. Clean up: delete those points (DESTRUCTIVE; --confirm required)
+python -m scripts.qdrant_purge --confirm
+#    or, for very orphan-heavy collections, drop the whole collection
+#    and rebuild it (with the correct payload indexes):
+python -m scripts.qdrant_purge --recreate --confirm
+
+# 3. Re-ingest the original PDFs through the live pipeline
+python -m scripts.reingest_directory \
+    --source-dir /app/data/uploads \
+    --scope global \
+    --doc-type "Re-ingested"
+```
+
+All three are idempotent — re-running on an already-clean state is a
+no-op and exits 0. `reingest_directory` skips files whose `source_filename`
+already has an `ingested` row in Postgres (override with `--force`).
+
 ---
 
 ## Module index — what each feature lives in
