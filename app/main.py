@@ -31,8 +31,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     logger = get_logger(__name__)
     settings = get_settings()
-
-    # Pre-warm Qdrant collection so the first request doesn't pay the cost.
     try:
         from app.vector_store.qdrant_client import get_vector_store
 
