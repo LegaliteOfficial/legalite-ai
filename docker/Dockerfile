@@ -25,7 +25,7 @@ COPY requirements.txt .
 # (nltk, tiktoken, sentencepiece, etc.) and the 15-second pip default chokes
 # on slow / flaky links. BuildKit cache mount keeps wheels around across
 # rebuilds so a transient network blip costs minutes, not a full re-download.
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,id=legalite-pip,target=/root/.cache/pip \
     pip install --prefix=/install \
         --timeout 600 \
         --retries 5 \
