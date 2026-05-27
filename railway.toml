@@ -18,7 +18,7 @@ dockerfilePath = "docker/Dockerfile"
 # Run migrations BEFORE the web process starts. ``alembic upgrade head`` is
 # idempotent, so running it on every cold start is safe and means a fresh
 # replica never serves traffic against a stale schema.
-startCommand              = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+startCommand = "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath           = "/health"
 healthcheckTimeout        = 30
 restartPolicyType         = "ON_FAILURE"
