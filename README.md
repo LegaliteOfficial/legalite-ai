@@ -398,8 +398,9 @@ project-root/
 │       ├── queue.py                       # enqueue_ingestion()
 │       └── worker.py                      # Arq WorkerSettings + ingest_pdf_task
 │
-├── docker/Dockerfile
+├── Dockerfile                             # Python 3.12 image + tesseract + uvicorn
 ├── docker-compose.yml                     # app + postgres + qdrant + redis + worker
+├── railway.toml                           # Pins Railway to Dockerfile builder
 ├── alembic.ini
 ├── pyproject.toml
 ├── requirements.txt

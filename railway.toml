@@ -12,7 +12,10 @@
 
 [build]
 builder      = "DOCKERFILE"
-dockerfilePath = "docker/Dockerfile"
+# Path is relative to the repo root. With Dockerfile at the root,
+# Railway's auto-detection also picks it up — the explicit path here is
+# belt-and-braces in case auto-detection ever regresses.
+dockerfilePath = "Dockerfile"
 
 [deploy]
 # Run migrations BEFORE the web process starts. ``alembic upgrade head`` is

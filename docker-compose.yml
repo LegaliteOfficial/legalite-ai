@@ -7,7 +7,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     container_name: legalite-app
     env_file: .env
     ports:
@@ -34,7 +34,7 @@ services:
     # image as the app so library versions can't drift between the two.
     build:
       context: .
-      dockerfile: docker/Dockerfile
+      dockerfile: Dockerfile
     container_name: legalite-worker
     env_file: .env
     volumes:
