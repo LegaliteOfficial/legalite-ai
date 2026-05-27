@@ -21,7 +21,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
-RUN pip install --prefix=/install -r requirements.txt
+# Generous timeout + retry budget — llama-index pulls heavy transitive deps
+# (nltk, tiktoken, sentencepiece, etc.) and the 15-second pip default chokes
+# on slow / flaky links. BuildKit cache mount keeps wheels around across
+# rebuilds so a transient network blip costs minutes, not a full re-download.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --prefix=/install \
+        --timeout 600 \
+        --retries 5 \
+        -r requirements.txt
 
 
 # ---- Stage 2: runtime ----
