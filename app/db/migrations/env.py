@@ -21,8 +21,15 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Inject runtime DB URL (overrides empty alembic.ini value)
-config.set_main_option("sqlalchemy.url", get_settings().sqlalchemy_url)
+# Inject runtime DB URL (overrides empty alembic.ini value).
+# configparser uses % for variable interpolation (%(name)s); URL-encoded
+# password characters like %40 trigger ValueError("invalid interpolation
+# syntax"). Doubling % to %% escapes it so configparser stores the URL
+# literally — engine_from_config later reads it back as a single %.
+config.set_main_option(
+    "sqlalchemy.url",
+    get_settings().sqlalchemy_url.replace("%", "%%"),
+)
 
 target_metadata = Base.metadata
 
