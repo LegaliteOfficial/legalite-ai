@@ -86,10 +86,17 @@ class QdrantVectorStore:
         settings = get_settings()
         self._collection = settings.qdrant_collection
         self._dim = settings.openai_embedding_dim
+        # ``timeout`` is in seconds. The default (5s) is too aggressive
+        # for Qdrant Cloud batched upserts with ``wait=True``: a 256-point
+        # batch over a transcontinental link can take 10-30s end-to-end,
+        # and search calls during indexing can briefly stall. 120s is
+        # large enough to absorb that without masking a truly dead
+        # cluster — Arq / FastAPI request budgets will still cap us.
         self._client = QdrantClient(
             url=settings.qdrant_url,
             api_key=settings.qdrant_api_key or None,
             prefer_grpc=False,
+            timeout=120,
         )
 
     # ---- collection lifecycle ---------------------------------------------
@@ -134,6 +141,13 @@ class QdrantVectorStore:
 
     # ---- writes ------------------------------------------------------------
 
+    # Qdrant Cloud rejects JSON payloads >32 MiB with HTTP 400. With
+    # 1536-d float embeddings each point is ~6 KB of vector + a few KB of
+    # payload text, so a long document (e.g. the Ghana Constitution at
+    # several thousand chunks) overflows in a single upsert. Batching at
+    # 256 points keeps every request comfortably under the limit.
+    _UPSERT_BATCH_SIZE = 256
+
     def upsert(
         self,
         embeddings: list[list[float]],
@@ -149,7 +163,13 @@ class QdrantVectorStore:
             qm.PointStruct(id=pid, vector=vec, payload=pl.as_dict())
             for pid, vec, pl in zip(point_ids, embeddings, payloads, strict=True)
         ]
-        self._client.upsert(collection_name=self._collection, points=points, wait=True)
+        for start in range(0, len(points), self._UPSERT_BATCH_SIZE):
+            batch = points[start : start + self._UPSERT_BATCH_SIZE]
+            self._client.upsert(
+                collection_name=self._collection,
+                points=batch,
+                wait=True,
+            )
         return point_ids
 
     def delete_by_document(self, document_id: str) -> None:

@@ -65,7 +65,17 @@ class ConfidenceEngine:
                 reason="no passages retrieved",
             )
 
-        top_retrieval = passages[0].score
+        # ``passages[0].score`` is the RRF-fused rank score (max ≈ 2/(k+1)
+        # ≈ 0.033 for our k=60), which is NOT comparable to the cosine
+        # threshold in ``RAG_MIN_CONFIDENCE_SCORE``. Prefer the preserved
+        # pre-fusion cosine (``original_score``) when available — that's the
+        # signal the threshold was tuned for. Fall back to the fused score
+        # only when no vector hit reached the top of the fused list.
+        top_cosine = next(
+            (p.original_score for p in passages if p.original_score is not None),
+            None,
+        )
+        top_retrieval = top_cosine if top_cosine is not None else passages[0].score
         top_rerank = next(
             (p.rerank_score for p in passages if p.rerank_score is not None), None
         )
@@ -73,12 +83,12 @@ class ConfidenceEngine:
         # If we have rerank scores, trust them more. Otherwise rely on retrieval.
         primary = top_rerank if top_rerank is not None else top_retrieval
 
-        if top_rerank is None and top_retrieval < self._min_retrieval:
+        if top_rerank is None and top_cosine is not None and top_cosine < self._min_retrieval:
             return ConfidenceAssessment(
                 level="low",
                 score=float(primary),
                 refused=True,
-                reason=f"top retrieval score {top_retrieval:.2f} below threshold {self._min_retrieval}",
+                reason=f"top retrieval score {top_cosine:.2f} below threshold {self._min_retrieval}",
             )
         if top_rerank is not None and top_rerank < 0.15:
             return ConfidenceAssessment(

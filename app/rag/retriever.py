@@ -37,6 +37,13 @@ class RetrievedPassage:
     source: str = "vector"  # vector | keyword | hybrid
     # Rerank score (set by the Reranker; None if rerank disabled)
     rerank_score: float | None = None
+    # The retriever-native score before Reciprocal Rank Fusion mutates
+    # ``score``. For vector hits this is the cosine similarity (0–1
+    # scale, comparable to ``RAG_MIN_CONFIDENCE_SCORE``). For keyword
+    # hits this is the Postgres FTS rank, which is on a different scale
+    # — so callers should only treat ``original_score`` as a confidence
+    # signal when the passage's pre-fusion ``source`` was ``"vector"``.
+    original_score: float | None = None
     # Tenancy provenance — preserved across RRF so the structured /ask
     # response can group passages by source_scope (public vs private).
     organization_id: str | None = None
@@ -57,6 +64,7 @@ class RetrievedPassage:
         p = hit.payload
         return cls(
             score=hit.score,
+            original_score=hit.score,
             content=str(p.get("content", "")),
             law=p.get("law") or p.get("title"),
             article=p.get("article"),
