@@ -36,6 +36,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from arq.connections import RedisSettings
+
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.telemetry import ingestion_job_state
@@ -166,26 +168,23 @@ async def ingest_pdf_task(
         work_db.close()
 
 
+_worker_settings = get_settings()
+
+
 class WorkerSettings:
-    """Arq worker configuration. Resolved at module load."""
+    """Arq worker configuration. Resolved at module load.
+
+    Arq reads ``queue_name``, ``redis_settings``, and ``max_tries`` as
+    plain class attributes (it does string concatenation on
+    ``queue_name`` to derive the health-check key). Don't turn these into
+    classmethods — Arq won't call them, it will try to use the
+    classmethod object as a string and crash on startup.
+    """
 
     functions = [ingest_pdf_task]
     on_startup = startup
     on_shutdown = shutdown
-
-    @classmethod
-    def redis_settings(cls):  # type: ignore[no-untyped-def]
-        # Imported lazily so the web image doesn't require arq at runtime.
-        from arq.connections import RedisSettings
-
-        settings = get_settings()
-        return RedisSettings.from_dsn(settings.redis_url)
-
-    @classmethod
-    def queue_name(cls) -> str:
-        return get_settings().ingestion_queue_name
-
-    @classmethod
-    def max_tries(cls) -> int:
-        # arq retries internally; our job row handles "giving up" semantics.
-        return get_settings().ingestion_max_retries + 1
+    queue_name = _worker_settings.ingestion_queue_name
+    # arq retries internally; our job row handles "giving up" semantics.
+    max_tries = _worker_settings.ingestion_max_retries + 1
+    redis_settings = RedisSettings.from_dsn(_worker_settings.redis_url)
