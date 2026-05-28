@@ -28,7 +28,10 @@ dockerfilePath = "Dockerfile"
 #
 # or via a separate one-shot service whose start command IS
 # ``alembic upgrade head`` and which has no healthcheck.
-startCommand = "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+# ``$PORT`` must be shell-expanded, so we explicitly wrap in ``sh -c``.
+# Without the shell, Railway/Docker would invoke uvicorn directly and the
+# literal string ``$PORT`` would be passed as the port argument.
+startCommand = "sh -c 'uvicorn app.main:app --host 0.0.0.0 --port $PORT'"
 healthcheckPath           = "/health"
 # 300s is overkill for a healthy replica, but it absorbs OpenAI client
 # warmup + Qdrant index creation on a cold container.
