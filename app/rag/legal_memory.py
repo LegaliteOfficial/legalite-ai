@@ -91,10 +91,18 @@ class LegalMemory:
         session_id: uuid.UUID,
         content: str,
         metadata: dict | None = None,
-    ) -> None:
-        self._repo.add_message(
+    ) -> uuid.UUID:
+        """Append the assistant turn and return its message id.
+
+        Callers expose this id back to the client so users can attach
+        feedback via ``POST /ask/{message_id}/feedback``. Returning the
+        id is cheap and avoids a follow-up SELECT just to find the row
+        we just wrote.
+        """
+        msg = self._repo.add_message(
             session_id, role="assistant", content=content, metadata=metadata
         )
+        return msg.id
 
 
 def _to_turn(m: ChatMessage) -> MemoryTurn:

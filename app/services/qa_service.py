@@ -135,7 +135,7 @@ class QAService:
             # entirely. Returns instantly with a templated reply.
             if plan.intent in CONVERSATIONAL_INTENTS:
                 conv = self._conversational.respond(question, plan.intent)
-                self._memory.append_assistant(
+                msg_id = self._memory.append_assistant(
                     sid,
                     conv.answer,
                     metadata={
@@ -144,6 +144,7 @@ class QAService:
                         "refused": False,
                         "citations": [],
                         "conversational": True,
+                        "query_intent": plan.intent.value,
                     },
                 )
                 total_ms = int((time.perf_counter() - t0) * 1000)
@@ -162,6 +163,7 @@ class QAService:
                     structured_answer=conv.structured,
                     query_intent=plan.intent.value,
                     query_intent_confidence=plan.confidence,
+                    message_id=str(msg_id),
                 )
 
             with (
@@ -206,7 +208,7 @@ class QAService:
                 [] if result.refused else format_sources(result.used_passages)
             )
 
-            self._memory.append_assistant(
+            msg_id = self._memory.append_assistant(
                 sid,
                 result.answer,
                 metadata={
@@ -214,6 +216,7 @@ class QAService:
                     "confidence_score": result.confidence_score,
                     "refused": result.refused,
                     "citations": [c.model_dump() for c in citations],
+                    "query_intent": plan.intent.value,
                 },
             )
 
@@ -266,6 +269,7 @@ class QAService:
                 structured_answer=result.structured,
                 query_intent=plan.intent.value,
                 query_intent_confidence=plan.confidence,
+                message_id=str(msg_id),
             )
 
     def ask_stream(

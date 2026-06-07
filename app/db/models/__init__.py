@@ -11,6 +11,7 @@ from app.db.models.ingestion_job import IngestionJob
 from app.db.models.legal_case import LegalCase
 from app.db.models.legal_chunk import LegalChunk
 from app.db.models.legal_document import LegalDocument
+from app.db.models.query_feedback import QueryFeedback
 
 __all__ = [
     "CaseCitation",
@@ -21,4 +22,5 @@ __all__ = [
     "LegalCase",
     "LegalChunk",
     "LegalDocument",
+    "QueryFeedback",
 ]

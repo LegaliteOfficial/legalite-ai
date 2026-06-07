@@ -119,3 +119,8 @@ class AskResponse(BaseModel):
     # observability only — does not change retrieval semantics for clients.
     query_intent: str | None = None
     query_intent_confidence: float | None = None
+    # Phase B (self-learning loop): the assistant turn's persistent
+    # ``chat_messages.id``. Clients use it to attach feedback via
+    # ``POST /ask/{message_id}/feedback``. Optional so legacy /ask
+    # callers that don't care about feedback can keep ignoring it.
+    message_id: str | None = None
