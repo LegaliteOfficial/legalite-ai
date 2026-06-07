@@ -20,6 +20,9 @@ def _p(score: float, law: str | None = None, rerank: float | None = None) -> Ret
         page_end=None,
         vector_id="v",
         rerank_score=rerank,
+        # Phase A: pre-fusion cosine is preserved on the passage so the
+        # engine sees the real retrieval signal, not the RRF rank score.
+        original_score=score,
     )
 
 
@@ -30,10 +33,22 @@ def test_refuses_when_no_passages() -> None:
     assert a.level == "low"
 
 
-def test_refuses_when_retrieval_below_threshold() -> None:
+def test_refuses_only_on_catastrophic_noise() -> None:
+    """Phase A: LOW retrieval no longer auto-refuses. Only a top cosine
+    below the noise floor (~0.10) AND no useful rerank triggers refusal
+    pre-generation. Everything else flows to the LLM, which gets the
+    chance to synthesise an answer or refuse on its own."""
     engine = ConfidenceEngine(min_retrieval_score=0.5)
-    a = engine.assess_before_generation([_p(0.2)])
+
+    # Catastrophic noise — both signals below floor → refuse.
+    a = engine.assess_before_generation([_p(0.05, rerank=0.01)])
     assert a.refused
+    assert a.level == "low"
+
+    # Weak but above noise floor → LOW label, but NOT refused. The LLM
+    # gets to try.
+    a = engine.assess_before_generation([_p(0.20)])
+    assert not a.refused
     assert a.level == "low"
 
 

@@ -74,6 +74,14 @@ class Settings(BaseSettings):
     query_planner_llm_fallback_enabled: bool = False
     query_planner_min_heuristic_confidence: float = 0.5
 
+    # Query understanding (Phase A). When enabled, every retrieval-bound
+    # question is rewritten into 2–3 semantic variants before search,
+    # broadening recall on conversationally-phrased queries. Adds one LLM
+    # call (~300-500ms) per cache miss; identical questions are cached
+    # in-process. Disable to revert to single-query retrieval.
+    query_rewriter_enabled: bool = True
+    query_rewriter_max_variants: int = 3
+
     # Observability
     prometheus_enabled: bool = True
     otel_enabled: bool = False

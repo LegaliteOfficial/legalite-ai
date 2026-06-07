@@ -36,11 +36,18 @@ from app.db.repositories.chat_repository import ChatRepository
 from app.ingestion.embedding_service import EmbeddingService
 from app.rag.answer_generator import AnswerGenerator, GeneratedAnswer
 from app.rag.citation_formatter import format_citations, format_sources
+from app.rag.conversational_responder import ConversationalResponder
 from app.rag.hybrid_retriever import HybridRetriever
 from app.rag.legal_memory import LegalMemory
 from app.rag.multi_document_reasoner import MultiDocumentReasoner
 from app.rag.prompt_builder import DISCLAIMER, REFUSAL_TEXT
-from app.rag.query_planner import QueryIntent, QueryPlan, QueryPlanner
+from app.rag.query_planner import (
+    CONVERSATIONAL_INTENTS,
+    QueryIntent,
+    QueryPlan,
+    QueryPlanner,
+)
+from app.rag.query_rewriter import QueryRewriter
 from app.rag.streaming import SSEEvent
 from app.rag.reranker import BaseReranker, build_reranker
 from app.schemas.qa import AskResponse, Citation, StructuredAnswer
@@ -59,6 +66,8 @@ class QAService:
         reranker: BaseReranker | None = None,
         generator: AnswerGenerator | None = None,
         planner: QueryPlanner | None = None,
+        rewriter: QueryRewriter | None = None,
+        conversational: ConversationalResponder | None = None,
     ) -> None:
         from app.vector_store.qdrant_client import get_vector_store
 
@@ -69,12 +78,18 @@ class QAService:
             db=db, embeddings=embeddings, vector_store=vector_store
         )
         self._reranker = reranker or build_reranker()
+        # The rewriter is constructed eagerly so its in-process cache is
+        # shared across requests on the same QAService instance.
+        self._rewriter = rewriter if rewriter is not None else QueryRewriter()
         self._reasoner = MultiDocumentReasoner(
-            retriever=self._retriever, reranker=self._reranker
+            retriever=self._retriever,
+            reranker=self._reranker,
+            rewriter=self._rewriter,
         )
         self._generator = generator or AnswerGenerator()
         self._memory = LegalMemory(ChatRepository(db))
         self._planner = planner or QueryPlanner()
+        self._conversational = conversational or ConversationalResponder()
 
     def ask(
         self,
@@ -114,6 +129,40 @@ class QAService:
             )
             scope_label = "tenant" if org_label else "anonymous"
             record_tenant_request(org_label, "/ask")
+
+            # Conversational short-circuit — greetings, thanks, "who are
+            # you", etc. skip retrieval and the answer generator
+            # entirely. Returns instantly with a templated reply.
+            if plan.intent in CONVERSATIONAL_INTENTS:
+                conv = self._conversational.respond(question, plan.intent)
+                self._memory.append_assistant(
+                    sid,
+                    conv.answer,
+                    metadata={
+                        "confidence": conv.confidence,
+                        "confidence_score": 1.0,
+                        "refused": False,
+                        "citations": [],
+                        "conversational": True,
+                    },
+                )
+                total_ms = int((time.perf_counter() - t0) * 1000)
+                logger.info(
+                    "qa.answered.conversational",
+                    intent=plan.intent.value,
+                    total_latency_ms=total_ms,
+                )
+                return AskResponse(
+                    answer=conv.answer,
+                    citations=[],
+                    confidence=conv.confidence,
+                    sources_used=[],
+                    reasoning_summary=plan.rationale,
+                    session_id=str(sid),
+                    structured_answer=conv.structured,
+                    query_intent=plan.intent.value,
+                    query_intent_confidence=plan.confidence,
+                )
 
             with (
                 traced(
@@ -179,6 +228,32 @@ class QAService:
                 tokens_out=result.tokens_out,
                 gen_latency_ms=result.latency_ms,
                 total_latency_ms=total_ms,
+            )
+
+            # Phase A — per-request trace covering the full pipeline.
+            # Logged at INFO so it's visible without flipping log levels;
+            # field names match the "Retrieval diagnostics" list in the
+            # Phase A spec so anyone debugging a "why did it refuse"
+            # incident can grep one log line and see every stage.
+            logger.info(
+                "qa.trace",
+                original_query=question[:512],
+                query_variants=cross.query_variants,
+                intent=plan.intent.value,
+                intent_confidence=plan.confidence,
+                retrieved_count=len(passages),
+                top_retrieval_scores=[
+                    round(p.original_score, 3) if p.original_score is not None else None
+                    for p in passages[:5]
+                ],
+                top_rerank_scores=[
+                    round(p.rerank_score, 3) if p.rerank_score is not None else None
+                    for p in passages[:5]
+                ],
+                final_confidence=result.confidence,
+                final_confidence_score=round(result.confidence_score, 3),
+                refused=result.refused,
+                citation_count=len(citations),
             )
 
             return AskResponse(

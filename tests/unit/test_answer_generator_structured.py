@@ -30,6 +30,10 @@ from app.schemas.qa import StructuredAnswer, StructuredCitation
 def _passage(score: float = 0.8, **overrides: object) -> RetrievedPassage:
     base = dict(
         score=score,
+        # Phase A: confidence engine inspects ``original_score`` (the
+        # pre-fusion cosine) for refusal decisions. Mirror ``score`` here
+        # so test passages behave like real retrieved hits.
+        original_score=score,
         content="Section 17 says a landlord must give notice.",
         law="Rent Act",
         article=None,
@@ -198,12 +202,35 @@ def test_no_passages_short_circuits_before_llm_call() -> None:
     assert gen._client.chat.completions.last_kwargs is None  # type: ignore[attr-defined]
 
 
-def test_weak_retrieval_short_circuits_before_llm_call() -> None:
+def test_catastrophic_noise_short_circuits_before_llm_call() -> None:
+    """Phase A contract: only catastrophic-noise retrieval refuses pre-LLM.
+
+    Cosine < 0.10 AND no rerank (or rerank < 0.05) → the LLM doesn't see
+    the passages at all. Above noise floor → the LLM gets to try, even
+    if confidence ends up labeled LOW.
+    """
     gen = _make_generator(_GOOD_JSON)
-    weak = _passage(score=0.05)
-    result = gen.generate("q", [weak])
+    catastrophic = _passage(score=0.05)
+    result = gen.generate("q", [catastrophic])
     assert result.refused
     assert gen._client.chat.completions.last_kwargs is None  # type: ignore[attr-defined]
+
+
+def test_weak_but_above_noise_still_calls_llm() -> None:
+    """Phase A: weak-but-not-noise retrieval should NOT short-circuit.
+
+    A cosine of 0.20 is below the HIGH threshold (0.5) but well above
+    the noise floor (0.10). Pre-Phase-A this would have refused; now
+    we hand the passages to the LLM which can ground a careful answer
+    or refuse on its own with full context.
+    """
+    gen = _make_generator(_GOOD_JSON)
+    weak = _passage(score=0.20)
+    result = gen.generate("Can a landlord evict without notice?", [weak])
+    # LLM WAS called (mock kwargs populated).
+    assert gen._client.chat.completions.last_kwargs is not None  # type: ignore[attr-defined]
+    # Result depends on the LLM mock, but it should NOT be a pre-LLM refusal.
+    assert not result.refused
 
 
 def test_llm_exception_falls_back_to_refusal() -> None:

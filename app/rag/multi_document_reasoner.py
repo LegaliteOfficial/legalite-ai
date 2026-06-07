@@ -20,12 +20,13 @@ synthesis happens via the prompt's "surface conflicts" rule.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.tenant_context import TenantContext
 from app.rag.hybrid_retriever import HybridRetriever
+from app.rag.query_rewriter import QueryRewriter
 from app.rag.reranker import BaseReranker
 from app.rag.retriever import RetrievedPassage
 
@@ -46,6 +47,9 @@ DEFAULT_LAW_BUCKETS: tuple[str | None, ...] = (
 class CrossDocResult:
     passages: list[RetrievedPassage]
     bucket_counts: dict[str, int]
+    # Phase A diagnostics — what the query understanding layer actually
+    # ran. Empty list means the rewriter was disabled or returned nothing.
+    query_variants: list[str] = field(default_factory=list)
 
 
 class MultiDocumentReasoner:
@@ -55,10 +59,15 @@ class MultiDocumentReasoner:
         retriever: HybridRetriever,
         reranker: BaseReranker,
         buckets: tuple[str | None, ...] | None = None,
+        rewriter: QueryRewriter | None = None,
     ) -> None:
         self._retriever = retriever
         self._reranker = reranker
         self._buckets = buckets or DEFAULT_LAW_BUCKETS
+        # ``rewriter`` is optional. When None, gather() runs single-query
+        # retrieval (the pre-Phase-A behavior). Callers that want to
+        # opt-out of rewriting can pass ``rewriter=None`` explicitly.
+        self._rewriter = rewriter
 
     def gather(
         self, question: str, *, tenant: TenantContext | None = None
@@ -69,6 +78,10 @@ class MultiDocumentReasoner:
         merged: list[RetrievedPassage] = []
         bucket_counts: dict[str, int] = {}
 
+        # Stage 1 — original question, bucketed retrieval. This is the
+        # path we trust most: per-law-type retrieval ensures every
+        # authority tier (constitution, act, regulation, case_law) gets
+        # fair representation in the candidate pool.
         for law_type in self._buckets:
             result = self._retriever.retrieve(
                 question,
@@ -80,19 +93,47 @@ class MultiDocumentReasoner:
             bucket_counts[label] = result.n_fused
             merged.extend(result.passages)
 
-        if not merged:
-            return CrossDocResult(passages=[], bucket_counts=bucket_counts)
+        # Stage 2 — semantic variants, single (non-bucketed) retrieval
+        # each. We don't re-bucket variants because the original already
+        # spread the candidate pool across tiers; variants are about
+        # recall on different phrasings of the SAME intent, not
+        # different authority tiers. Cost: 1 Qdrant search per variant
+        # instead of 5.
+        variants: list[str] = []
+        if self._rewriter is not None:
+            variants = self._rewriter.rewrite(question)
+        for v_idx, variant in enumerate(variants):
+            result = self._retriever.retrieve(
+                variant,
+                law_type=None,
+                top_k_final=per_bucket,
+                tenant=tenant,
+            )
+            bucket_counts[f"rewrite_{v_idx}"] = result.n_fused
+            merged.extend(result.passages)
 
-        # Dedup by vector_id (same chunk may appear in `None` bucket + typed bucket).
-        seen: set[str] = set()
-        deduped: list[RetrievedPassage] = []
+        if not merged:
+            return CrossDocResult(
+                passages=[],
+                bucket_counts=bucket_counts,
+                query_variants=variants,
+            )
+
+        # Dedup by vector_id. The variant retrievals will frequently
+        # surface chunks the bucketed pass already found — that's fine,
+        # we just collapse them to one passage and keep the highest score
+        # observed across all retrievals.
+        best_by_key: dict[str, RetrievedPassage] = {}
         for p in merged:
             key = p.vector_id or f"text:{hash(p.content)}"
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(p)
+            existing = best_by_key.get(key)
+            if existing is None or (p.score or 0.0) > (existing.score or 0.0):
+                best_by_key[key] = p
+        deduped = list(best_by_key.values())
 
+        # Rerank the unified pool against the ORIGINAL question — the
+        # variants were a recall tool, not the user's actual intent. The
+        # cross-encoder should score relevance to what the user typed.
         final = self._reranker.rerank(
             question, deduped, top_n=settings.rag_topk_final
         )
@@ -102,5 +143,10 @@ class MultiDocumentReasoner:
             merged=len(merged),
             deduped=len(deduped),
             final=len(final),
+            variants=len(variants),
         )
-        return CrossDocResult(passages=final, bucket_counts=bucket_counts)
+        return CrossDocResult(
+            passages=final,
+            bucket_counts=bucket_counts,
+            query_variants=variants,
+        )

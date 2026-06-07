@@ -56,7 +56,22 @@ class ConfidenceEngine:
     def assess_before_generation(
         self, passages: list[RetrievedPassage]
     ) -> ConfidenceAssessment:
-        """Cheap, pre-LLM check. Used to short-circuit weak retrieval."""
+        """Pre-LLM gating.
+
+        Phase A change: the pre-LLM bar is now very low. We only refuse
+        here when retrieval is *catastrophically* empty (zero passages or
+        a top cosine indistinguishable from noise). For everything else
+        we hand the passages to the LLM and let it synthesise or refuse
+        on its own — the post-LLM grounding check (``assess_final``)
+        catches ungrounded outputs.
+
+        Why this matters: with hard-cutoff refusal at retrieval time, a
+        conversationally-phrased question (e.g. "tell me about the
+        constitution") that lands at cosine 0.32 was rejected even
+        though dozens of strongly-relevant chunks existed. The LLM,
+        given those same chunks, would have produced a solid grounded
+        answer. We were leaving quality on the table.
+        """
         if not passages:
             return ConfidenceAssessment(
                 level="low",
@@ -69,8 +84,7 @@ class ConfidenceEngine:
         # ≈ 0.033 for our k=60), which is NOT comparable to the cosine
         # threshold in ``RAG_MIN_CONFIDENCE_SCORE``. Prefer the preserved
         # pre-fusion cosine (``original_score``) when available — that's the
-        # signal the threshold was tuned for. Fall back to the fused score
-        # only when no vector hit reached the top of the fused list.
+        # signal we tuned thresholds against.
         top_cosine = next(
             (p.original_score for p in passages if p.original_score is not None),
             None,
@@ -83,23 +97,32 @@ class ConfidenceEngine:
         # If we have rerank scores, trust them more. Otherwise rely on retrieval.
         primary = top_rerank if top_rerank is not None else top_retrieval
 
-        if top_rerank is None and top_cosine is not None and top_cosine < self._min_retrieval:
+        # Catastrophic-noise refusal. ``_min_retrieval`` is the
+        # configurable HIGH threshold (default 0.35); the catastrophic
+        # bar is fixed at 0.10 because below that we're below noise even
+        # on modern text-embedding-3-small.
+        if top_cosine is not None and top_cosine < 0.10 and (
+            top_rerank is None or top_rerank < 0.05
+        ):
             return ConfidenceAssessment(
                 level="low",
                 score=float(primary),
                 refused=True,
-                reason=f"top retrieval score {top_cosine:.2f} below threshold {self._min_retrieval}",
-            )
-        if top_rerank is not None and top_rerank < 0.15:
-            return ConfidenceAssessment(
-                level="low",
-                score=float(top_rerank),
-                refused=True,
-                reason=f"top rerank score {top_rerank:.2f} indicates no relevant passage",
+                reason=(
+                    f"retrieval is essentially noise "
+                    f"(top cosine {top_cosine:.2f}, top rerank "
+                    f"{top_rerank if top_rerank is not None else 'n/a'})"
+                ),
             )
 
+        # Three-tier confidence on the cosine scale. These thresholds
+        # match ``RAG_MIN_CONFIDENCE_SCORE`` semantics: HIGH = clearly on
+        # topic, MEDIUM = related but partial, LOW = weak but the LLM
+        # still gets to try. LOW is NOT a refusal anymore — refusal only
+        # happens on the catastrophic-noise branch above or in
+        # assess_final when the LLM produced ungrounded text.
         level: Confidence
-        if primary >= 0.6:
+        if primary >= 0.5:
             level = "high"
         elif primary >= 0.3:
             level = "medium"
@@ -108,7 +131,7 @@ class ConfidenceEngine:
         return ConfidenceAssessment(
             level=level,
             score=float(primary),
-            refused=level == "low",
+            refused=False,
             reason=f"primary={primary:.2f} (rerank={top_rerank}, retrieval={top_retrieval:.2f})",
         )
 
@@ -118,7 +141,22 @@ class ConfidenceEngine:
         answer: str,
         pre_assessment: ConfidenceAssessment,
     ) -> ConfidenceAssessment:
-        """Post-LLM refinement using answer grounding + citation consistency."""
+        """Post-LLM refinement using answer grounding + citation consistency.
+
+        Phase A change: LOW-confidence retrieval is no longer an
+        automatic refusal. If the LLM produced a grounded answer (at
+        least one [n] marker) we surface it with a LOW confidence label
+        so the client can show a caveat — that's strictly more useful
+        than the previous behavior, which returned the canned refusal
+        sentence and dropped the LLM's reasoning entirely.
+
+        Refusal still happens in two cases:
+
+        1. Pre-assessment already refused (catastrophic-noise branch).
+        2. The LLM output is ungrounded — no [n] markers at all.
+           Ungrounded content is the system's biggest hallucination
+           risk; we hold the line there.
+        """
         if pre_assessment.refused:
             return pre_assessment
 
@@ -133,24 +171,28 @@ class ConfidenceEngine:
         final_score = max(0.0, min(1.0, pre_assessment.score + bonus))
 
         if not grounded:
-            level: Confidence = "low"
             return ConfidenceAssessment(
                 level="low",
                 score=final_score,
                 refused=True,
                 reason="answer contains no citation markers; refusing to surface ungrounded content",
             )
-        if final_score >= 0.6 and consistency >= 0.6:
+
+        level: Confidence
+        if final_score >= 0.5 and consistency >= 0.6:
             level = "high"
         elif final_score >= 0.3:
             level = "medium"
         else:
             level = "low"
 
+        # LOW is NOT a refusal anymore. A grounded LOW-confidence answer
+        # is more useful than the canned refusal sentence — the client
+        # already sees ``confidence: "low"`` and can present a caveat.
         return ConfidenceAssessment(
             level=level,
             score=final_score,
-            refused=level == "low",
+            refused=False,
             reason=(
                 f"final={final_score:.2f} consistency={consistency:.2f} "
                 f"grounded={grounded}"

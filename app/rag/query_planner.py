@@ -52,6 +52,22 @@ class QueryIntent(StrEnum):
     FOLLOW_UP = "follow_up"
     INSUFFICIENT_CONTEXT = "insufficient_context"
     GENERAL_LEGAL_QA = "general_legal_qa"
+    # Conversational intents — handled by ConversationalResponder
+    # WITHOUT retrieval. The pipeline short-circuits before hybrid search.
+    CONVERSATIONAL_GREETING = "conversational_greeting"
+    CONVERSATIONAL_FAREWELL = "conversational_farewell"
+    CONVERSATIONAL_META = "conversational_meta"
+    CONVERSATIONAL_SMALL_TALK = "conversational_small_talk"
+
+
+CONVERSATIONAL_INTENTS: frozenset[QueryIntent] = frozenset(
+    {
+        QueryIntent.CONVERSATIONAL_GREETING,
+        QueryIntent.CONVERSATIONAL_FAREWELL,
+        QueryIntent.CONVERSATIONAL_META,
+        QueryIntent.CONVERSATIONAL_SMALL_TALK,
+    }
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -160,6 +176,87 @@ _AMBIGUOUS_PHRASES = (
 )
 
 
+# Conversational rules. These match BEFORE legal rules but only "win" when
+# the question carries no legal substance — e.g. "Hi, what does the
+# constitution say about land?" still routes to STATUTE_QUESTION because
+# legal rules also match. See ``_classify_heuristic``.
+_CONVERSATIONAL_RULES: tuple[_Rule, ...] = (
+    _Rule(
+        QueryIntent.CONVERSATIONAL_GREETING,
+        "greeting",
+        re.compile(
+            r"^\s*(hi+|hello+|hey+|yo|"
+            r"good\s+(morning|afternoon|evening|day)|"
+            r"greetings|howdy|sup|wassup|what'?s\s+up|"
+            r"how\s+are\s+(you|things|you\s+doing)|"
+            r"how('?s|\s+is)\s+(it\s+going|your\s+day))\b",
+            re.IGNORECASE,
+        ),
+        0.85,
+    ),
+    _Rule(
+        QueryIntent.CONVERSATIONAL_FAREWELL,
+        "farewell_or_thanks",
+        re.compile(
+            r"^\s*(bye+|goodbye|see\s+(?:you|ya)|cya|later|"
+            r"talk\s+(?:to\s+you\s+)?later|peace(?:\s+out)?|take\s+care|"
+            r"thanks?(?:\s+a\s+lot|\s+so\s+much)?|thank\s+you|thx|ty|"
+            r"appreciate\s+it|much\s+appreciated|"
+            r"cool|got\s+it|understood|"
+            r"ok(?:ay)?|alright|sounds\s+good|perfect|great|awesome)\s*[!.\s]*$",
+            re.IGNORECASE,
+        ),
+        0.8,
+    ),
+    _Rule(
+        QueryIntent.CONVERSATIONAL_META,
+        "meta_question",
+        re.compile(
+            r"\b(who\s+are\s+you|what\s+(?:can\s+you\s+do|are\s+you|do\s+you\s+do)|"
+            r"how\s+do\s+you\s+work|what\s+is\s+(?:this|legalite)|"
+            r"introduce\s+yourself|tell\s+me\s+about\s+yourself|"
+            r"are\s+you\s+(?:an?\s+)?(?:ai|bot|human|chatbot|robot)|"
+            r"what'?s\s+your\s+name|"
+            r"how\s+(?:can|do)\s+you\s+help|"
+            r"what\s+do\s+you\s+know|what\s+can\s+I\s+ask\s+you)\b",
+            re.IGNORECASE,
+        ),
+        0.75,
+    ),
+    _Rule(
+        QueryIntent.CONVERSATIONAL_SMALL_TALK,
+        "small_talk",
+        re.compile(
+            r"\b(nice\s+to\s+(?:meet|see)|good\s+to\s+(?:see|talk)|"
+            r"hope\s+you('?re|\s+are)\s+(well|good|doing)|"
+            r"how('?s|\s+is)\s+the\s+(weather|day)|"
+            r"having\s+a\s+(good|nice)\s+day)\b",
+            re.IGNORECASE,
+        ),
+        0.55,
+    ),
+)
+
+
+# Legal keywords that, if present, override conversational classification.
+# When a question contains both a greeting and any legal substance, the
+# legal intent wins — we don't want "Hi, what does the constitution say"
+# to be answered with a greeting and no retrieval.
+_LEGAL_SUBSTANCE_RE = re.compile(
+    r"\b(constitution|act|statute|regulation|law|legal|court|case|judge|"
+    r"judgment|judgement|ruling|precedent|article|section|chapter|clause|"
+    r"contract|agreement|breach|tort|negligence|liability|damages|"
+    r"crime|criminal|civil|tenancy|tenant|landlord|employment|labour|"
+    r"labor|dismissal|maternity|land|property|estate|inherit|will|"
+    r"divorce|marriage|child|custody|citizenship|immigration|"
+    r"parliament|government|minister|president|right|freedom|speech|"
+    r"liberty|due\s+process|police|arrest|bail|trial|sentence|"
+    r"prosecut|defend|plaintiff|appeal|jurisdiction|tribunal|"
+    r"taxation|tax|revenue|company|business|incorporate)\b",
+    re.IGNORECASE,
+)
+
+
 # ---------------------------------------------------------------------------
 # Planner
 # ---------------------------------------------------------------------------
@@ -226,6 +323,29 @@ class QueryPlanner:
                         rationale="ambiguous pronoun without conversational memory",
                         matched_signals=("ambiguous_pronoun",),
                     )
+
+        # Conversational pass — only "wins" when there is no legal substance
+        # in the rest of the message. "Hi" or "thanks!" → conversational;
+        # "Hi, what does the constitution say about land?" → legal.
+        legal_present = bool(_LEGAL_SUBSTANCE_RE.search(text))
+        if not legal_present:
+            conv_scored: dict[QueryIntent, tuple[float, list[str]]] = {}
+            for rule in _CONVERSATIONAL_RULES:
+                if rule.pattern.search(text):
+                    prev_score, signals = conv_scored.get(rule.intent, (0.0, []))
+                    new_score = min(0.95, prev_score + rule.weight)
+                    conv_scored[rule.intent] = (new_score, [*signals, rule.label])
+            if conv_scored:
+                intent, (confidence, signals) = max(
+                    conv_scored.items(), key=lambda x: x[1][0]
+                )
+                return QueryPlan(
+                    intent=intent,
+                    confidence=confidence,
+                    source="heuristic",
+                    rationale=f"conversational match: {', '.join(signals)}",
+                    matched_signals=tuple(signals),
+                )
 
         scored: dict[QueryIntent, tuple[float, list[str]]] = {}
         for rule in _RULES:
