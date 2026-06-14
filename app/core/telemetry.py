@@ -93,6 +93,21 @@ hallucination_floor = Counter(
     registry=REGISTRY,
 )
 
+# Self-learning loop (Tier 1) — every feedback POST emits one increment.
+# Labelling by (thumbs × query_intent × confidence × refused) lets the
+# dashboard answer: "what fraction of HIGH-confidence STATUTE_QUESTIONs
+# got thumbed down?", "are refused answers more likely to get downvotes
+# than non-refused?", "which intent is the loudest gap?". Cardinality
+# bound: 2 × ~13 intents × 3 confidences × 2 = ~156 series. Within Prom
+# safety limits.
+feedback_total = Counter(
+    "legalite_feedback_total",
+    "User feedback (👍/👎) on assistant answers — the input to the "
+    "self-improvement loop.",
+    labelnames=("thumbs", "query_intent", "confidence", "refused"),
+    registry=REGISTRY,
+)
+
 # Tenancy / isolation
 tenant_requests = Counter(
     "legalite_tenant_requests_total",

@@ -208,12 +208,71 @@ AI still can't find it after 5 minutes, then it's safe to retry.
 
 ---
 
+## 6. Helping the AI learn from real questions (feedback)
+
+Every answer carries a `message_id`. Sending feedback on a specific
+answer is the single most useful thing you can do to make the AI
+better — it's the input to the self-improvement loop.
+
+When the AI returns a great answer, OR when it gets something wrong
+or refuses unhelpfully, send a thumbs-up or thumbs-down:
+
+1. Grab the `message_id` from the `/ask` response (it's a field on the
+   JSON response right alongside `answer` and `confidence`).
+2. In `/docs`, scroll to **`POST /ask/{message_id}/feedback`**.
+3. Click **"Try it out"**, paste the `message_id` into the path, and
+   send a body like:
+
+   ```json
+   {
+     "thumbs": "down",
+     "comment": "Refused even though the Labour Act is uploaded"
+   }
+   ```
+
+   Use `"up"` for good answers, `"down"` for bad ones. The `comment`
+   is optional but extremely valuable — it tells your engineer
+   *why* the answer was wrong. Be specific: "wrong section number",
+   "missed Article 19", "refused when it should have answered", etc.
+
+### What happens to the feedback?
+
+- The feedback is saved alongside the question, the AI's answer,
+  the confidence it claimed, and which retrieval intent the planner
+  detected.
+- Re-sending feedback for the same `message_id` **updates** the
+  existing entry (lets you change your mind without creating
+  duplicates).
+- Your engineer can review feedback in aggregate to see which kinds
+  of questions consistently get thumbs-down — those become the
+  next round of corpus uploads, prompt tuning, or model upgrades.
+
+### What to thumb-down (most useful signal)
+
+- Refusals that *should* have been answers (e.g. "I don't know"
+  about something clearly in the Constitution).
+- Answers with the wrong section number, wrong case name, or wrong
+  year.
+- Answers that miss an obvious relevant provision.
+- Answers that are technically correct but unhelpfully terse.
+
+### What to thumb-up
+
+- Answers that get a tricky synthesis right across multiple sources.
+- Helpful gap responses ("I don't have X but I do have Y, would you
+  like to explore that?").
+- Anytime the AI nails a question you genuinely wanted help with —
+  positive signal trains future improvements as much as negative.
+
+---
+
 ## Reference card
 
 ```
-Upload:   POST /upload-law      (title, doc_type, file)
-Test:     POST /ask             ({"question": "..."})
-Explorer: https://<host>/docs
+Upload:    POST /upload-law                       (title, doc_type, file)
+Test:      POST /ask                              ({"question": "..."})
+Feedback:  POST /ask/{message_id}/feedback        ({"thumbs": "up|down", "comment": "..."})
+Explorer:  https://<host>/docs
 ```
 
 Questions or problems → contact your engineer with the `document_id`

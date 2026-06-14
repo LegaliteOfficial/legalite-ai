@@ -31,6 +31,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.dependencies.tenant import get_optional_tenant_context
+from app.core.telemetry import feedback_total
 from app.core.tenant_context import TenantContext
 from app.db.repositories.feedback_repository import FeedbackRepository
 from app.db.session import get_db
@@ -85,6 +86,20 @@ def post_feedback(
         ) from exc
 
     db.commit()
+
+    # Self-learning loop instrumentation: every persisted feedback
+    # increments the dashboard counter. Labels match the analytical
+    # columns on the row so PromQL queries can pivot the same way SQL
+    # would. ``query_intent`` may be None for pre-Phase-A turns whose
+    # metadata didn't carry an intent; coerce to ``unspecified`` so the
+    # cardinality stays bounded.
+    feedback_total.labels(
+        thumbs=row.thumbs,
+        query_intent=row.query_intent or "unspecified",
+        confidence=row.answer_confidence or "unspecified",
+        refused="true" if row.refused else "false",
+    ).inc()
+
     return FeedbackResponse(
         id=str(row.id),
         message_id=str(row.message_id),
