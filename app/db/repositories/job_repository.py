@@ -55,6 +55,36 @@ class JobRepository:
     def get(self, job_id: uuid.UUID) -> IngestionJob | None:
         return self._db.get(IngestionJob, job_id)
 
+    def find_in_flight_global_by_titles(
+        self, titles: list[str], doc_type: str
+    ) -> dict[str, IngestionJob]:
+        """Batch lookup for bulk-upload idempotency.
+
+        Returns a dict mapping ``title`` → in-flight GLOBAL job whose
+        ``status`` is ``queued`` or ``processing``. ``failed`` and
+        ``completed`` rows are intentionally excluded — failed jobs
+        should be retryable on re-upload, and completed jobs are
+        caught by the document lookup instead.
+
+        One SQL query regardless of batch size; same rationale as
+        :meth:`DocumentRepository.find_global_by_titles`.
+        """
+        if not titles:
+            return {}
+        rows = self._db.execute(
+            select(IngestionJob)
+            .where(IngestionJob.title.in_(titles))
+            .where(IngestionJob.doc_type == doc_type)
+            .where(
+                IngestionJob.visibility_scope == VisibilityScope.GLOBAL.value
+            )
+            .where(IngestionJob.status.in_(("queued", "processing")))
+        ).scalars()
+        # On the rare case the same title has two in-flight jobs (a
+        # client retried during a network blip and both made it), the
+        # later one wins. Either reference is a valid skip target.
+        return {job.title: job for job in rows}
+
     def get_many(self, job_ids: list[uuid.UUID]) -> list[IngestionJob]:
         """Fetch many jobs in one round-trip.
 

@@ -80,15 +80,49 @@ class BulkUploadRejection(BaseModel):
     reason: str
 
 
+class BulkUploadSkipped(BaseModel):
+    """One row in the ``skipped_duplicates`` array.
+
+    A skipped file is NOT a rejection — it just means the server
+    detected that the document already exists (or is being ingested)
+    and the upload was redundant. We surface the existing
+    ``document_id`` (or ``job_id`` for an in-flight match) so the
+    client can immediately deep-link to the existing artefact without
+    re-uploading.
+
+    Skip reasons:
+
+    - ``already_ingested`` — a completed ``legal_documents`` row exists
+      with the same ``(title, doc_type)`` at GLOBAL scope. The
+      ``existing_document_id`` field is set.
+    - ``in_flight`` — an ``ingestion_jobs`` row in ``queued`` or
+      ``processing`` status exists with the same ``(title, doc_type)``.
+      The ``existing_job_id`` field is set and clients should poll
+      that ID rather than the new one (which we never create).
+    - ``duplicate_in_batch`` — two files in the SAME request resolve
+      to the same title. The first one through wins; later ones are
+      surfaced here with no existing references.
+    """
+
+    filename: str
+    title: str
+    reason: Literal["already_ingested", "in_flight", "duplicate_in_batch"]
+    existing_document_id: uuid.UUID | None = None
+    existing_job_id: uuid.UUID | None = None
+
+
 class BulkUploadResponse(BaseModel):
     """Aggregate response from ``POST /upload-law/bulk``.
 
     Contract:
-    - ``accepted + rejected == len(files)`` (no file vanishes).
+    - ``accepted + rejected + skipped == len(files)`` (no file vanishes).
     - When ``accepted > 0`` the HTTP status is **202 Accepted** —
-      even if some files were rejected.
-    - When ``accepted == 0`` the HTTP status is **422
-      Unprocessable Entity** — the request did nothing useful.
+      even if some files were rejected or skipped.
+    - When ``accepted == 0`` AND ``skipped == 0`` the HTTP status is
+      **422 Unprocessable Entity** — every file was a hard rejection.
+    - When ``accepted == 0`` AND ``skipped > 0`` the HTTP status is
+      **200 OK** — nothing new was ingested but the duplicates
+      resolve to documents/jobs the caller can already see.
     - ``document_id`` and ``chunks_indexed`` are NOT in the per-job
       results because they don't exist yet — ingestion happens in
       the worker pool after the response returns. Clients should
@@ -99,9 +133,11 @@ class BulkUploadResponse(BaseModel):
 
     accepted: int
     rejected: int
+    skipped: int = 0
     max_files_per_request: int
     jobs: list[BulkUploadJobResult]
     rejections: list[BulkUploadRejection]
+    skipped_duplicates: list[BulkUploadSkipped] = []
     # Convenience for clients: the URL pattern to poll. Embedded in
     # the response so callers don't have to hard-code the path; if
     # we move the polling endpoint later, the response will redirect

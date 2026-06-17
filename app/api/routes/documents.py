@@ -33,12 +33,15 @@ from app.api.dependencies.services import get_ingestion_service
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.db.enums import ConfidentialityLevel, VisibilityScope
+from app.db.repositories.document_repository import DocumentRepository
+from app.db.repositories.job_repository import JobRepository
 from app.db.session import get_db
 from app.schemas.documents import UploadLawResponse
 from app.schemas.jobs import (
     BulkUploadJobResult,
     BulkUploadRejection,
     BulkUploadResponse,
+    BulkUploadSkipped,
 )
 from app.services.ingestion_service import IngestionService
 from app.services.upload_dispatcher import dispatch_upload
@@ -183,7 +186,13 @@ async def upload_law_bulk(
 
     accepted: list[BulkUploadJobResult] = []
     rejected: list[BulkUploadRejection] = []
+    skipped: list[BulkUploadSkipped] = []
 
+    # Stage 1 — read + validate all files up front. We need every
+    # file's derived title before we can hit the idempotency lookups
+    # in a single SQL round-trip. Per-file rejections land here so
+    # they don't pollute the title set sent to the database.
+    prepared: list[tuple[str, str, bytes]] = []  # (filename, title, content)
     for upload in files:
         filename = upload.filename or "<unnamed>"
         try:
@@ -191,13 +200,73 @@ async def upload_law_bulk(
                 upload, max_upload_mb=settings.max_upload_mb
             )
         except _BulkRejected as exc:
-            rejected.append(BulkUploadRejection(filename=filename, reason=exc.reason))
+            rejected.append(
+                BulkUploadRejection(filename=filename, reason=exc.reason)
+            )
+            continue
+        prepared.append((filename, title, content))
+
+    # Stage 2 — single-shot idempotency lookup. Two SQL queries
+    # regardless of batch size: one against ``legal_documents`` for
+    # already-ingested matches, one against ``ingestion_jobs`` for
+    # in-flight matches. Skipping files this way avoids producing
+    # duplicate Qdrant vectors that would later bias retrieval.
+    candidate_titles = [t for _, t, _ in prepared]
+    doc_repo = DocumentRepository(db)
+    job_repo = JobRepository(db)
+    existing_docs = doc_repo.find_global_by_titles(candidate_titles, doc_type_clean)
+    in_flight_jobs = job_repo.find_in_flight_global_by_titles(
+        candidate_titles, doc_type_clean
+    )
+
+    # Stage 3 — enqueue or skip. ``seen_in_batch`` catches the case
+    # where the SAME bulk request contains the same title twice (the
+    # user pasted a folder with duplicates — we've already seen this
+    # in production).
+    seen_in_batch: set[str] = set()
+    for filename, title, content in prepared:
+        # 3a — within-batch duplicate. First occurrence proceeds.
+        if title in seen_in_batch:
+            skipped.append(
+                BulkUploadSkipped(
+                    filename=filename,
+                    title=title,
+                    reason="duplicate_in_batch",
+                )
+            )
+            continue
+        seen_in_batch.add(title)
+
+        # 3b — completed ingestion already on file.
+        existing_doc = existing_docs.get(title)
+        if existing_doc is not None:
+            skipped.append(
+                BulkUploadSkipped(
+                    filename=filename,
+                    title=title,
+                    reason="already_ingested",
+                    existing_document_id=existing_doc.id,
+                )
+            )
             continue
 
-        # Each ``dispatch_upload`` commits its own transaction (the
-        # job row + storage write are durable BEFORE the enqueue
-        # call). Per-file commits keep one bad file from invalidating
-        # the rest of the batch.
+        # 3c — in-flight job (queued or processing). Returning the
+        # existing job_id is more useful than enqueuing a duplicate
+        # — the client can poll it the same way they would the new
+        # one and the corpus stays clean.
+        in_flight = in_flight_jobs.get(title)
+        if in_flight is not None:
+            skipped.append(
+                BulkUploadSkipped(
+                    filename=filename,
+                    title=title,
+                    reason="in_flight",
+                    existing_job_id=in_flight.id,
+                )
+            )
+            continue
+
+        # 3d — clean: enqueue.
         try:
             job = await dispatch_upload(
                 db,
@@ -239,20 +308,28 @@ async def upload_law_bulk(
         total=len(files),
         accepted=len(accepted),
         rejected=len(rejected),
+        skipped=len(skipped),
     )
 
-    # HTTP semantics: if the whole batch was rejected, flip to 422
-    # so the client sees a hard failure status. Mixed batches stay
-    # at 202 — at least one file is being processed.
-    if not accepted:
+    # HTTP semantics:
+    # - Mixed batch with at least one enqueue → 202 Accepted (default).
+    # - Nothing enqueued AND nothing skipped → 422; the batch was
+    #   purely junk and the caller has nothing to wait for.
+    # - Nothing enqueued BUT files were skipped → 200; the corpus is
+    #   already in the state the caller wanted, no work to do.
+    if not accepted and not skipped:
         response.status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    elif not accepted:
+        response.status_code = status.HTTP_200_OK
 
     return BulkUploadResponse(
         accepted=len(accepted),
         rejected=len(rejected),
+        skipped=len(skipped),
         max_files_per_request=settings.bulk_upload_max_files,
         jobs=accepted,
         rejections=rejected,
+        skipped_duplicates=skipped,
     )
 
 

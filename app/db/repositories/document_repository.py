@@ -89,6 +89,36 @@ class DocumentRepository:
         self._db.flush()
         return doc
 
+    def find_global_by_titles(
+        self, titles: Iterable[str], doc_type: str
+    ) -> dict[str, LegalDocument]:
+        """Batch lookup for bulk-upload idempotency.
+
+        Returns a dict mapping ``title`` → existing GLOBAL document
+        whose ``status == 'ingested'``. Only completed documents
+        count — half-ingested rows shouldn't block a retry.
+
+        One SQL query regardless of batch size, which matters because
+        ``POST /upload-law/bulk`` is the only caller and the alternative
+        is N queries per request.
+        """
+        title_list = [t for t in titles if t]
+        if not title_list:
+            return {}
+        rows = self._db.execute(
+            select(LegalDocument)
+            .where(LegalDocument.title.in_(title_list))
+            .where(LegalDocument.doc_type == doc_type)
+            .where(
+                LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value
+            )
+            .where(LegalDocument.status == "ingested")
+        ).scalars()
+        # If the same title exists twice (it shouldn't but might in
+        # legacy data), the later row wins. Both rows are equally
+        # valid skip targets so this is fine.
+        return {doc.title: doc for doc in rows}
+
     def set_remote_storage_key(
         self, document_id: uuid.UUID, remote_storage_key: str
     ) -> None:
