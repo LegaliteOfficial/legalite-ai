@@ -25,6 +25,12 @@ class JobStatusResponse(BaseModel):
     status: JobStatus
     progress: int
     document_id: uuid.UUID | None = None
+    # Populated once ``status == "completed"``. Mirrors the legacy
+    # ``/upload-law`` response's ``chunks_indexed`` so polling clients
+    # can verify a doc actually produced text — not just that ingestion
+    # didn't crash. 0 means the document row exists but no chunks
+    # landed (empty PDF, OCR failure, etc.).
+    chunk_count: int = 0
     visibility_scope: str
     document_origin: str | None = None
     title: str
@@ -83,8 +89,12 @@ class BulkUploadResponse(BaseModel):
       even if some files were rejected.
     - When ``accepted == 0`` the HTTP status is **422
       Unprocessable Entity** — the request did nothing useful.
-    - Clients should poll ``GET /jobs/{job_id}`` for each accepted
-      ``job_id`` to track ingestion progress.
+    - ``document_id`` and ``chunks_indexed`` are NOT in the per-job
+      results because they don't exist yet — ingestion happens in
+      the worker pool after the response returns. Clients should
+      hit ``GET /ingestion/jobs/bulk?ids=<id1,id2,...>`` (or
+      ``GET /ingestion/jobs/{id}`` for one at a time) to learn the
+      ``document_id`` + ``chunk_count`` once each job lands.
     """
 
     accepted: int
@@ -92,3 +102,21 @@ class BulkUploadResponse(BaseModel):
     max_files_per_request: int
     jobs: list[BulkUploadJobResult]
     rejections: list[BulkUploadRejection]
+    # Convenience for clients: the URL pattern to poll. Embedded in
+    # the response so callers don't have to hard-code the path; if
+    # we move the polling endpoint later, the response will redirect
+    # them transparently.
+    poll_endpoint: str = "/ingestion/jobs/bulk?ids=<comma-separated>"
+
+
+class BulkJobStatusResponse(BaseModel):
+    """Aggregate response from ``GET /ingestion/jobs/bulk?ids=...``.
+
+    ``found`` is one entry per matched ID; ``missing`` carries IDs the
+    caller asked for but that don't exist (or that the caller can't
+    see). We deliberately conflate "not found" and "not authorised"
+    so cross-tenant probing returns no information.
+    """
+
+    found: list[JobStatusResponse]
+    missing: list[uuid.UUID]

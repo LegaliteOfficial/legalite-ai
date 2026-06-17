@@ -10,10 +10,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.enums import VisibilityScope
 from app.db.models.ingestion_job import IngestionJob
+from app.db.models.legal_chunk import LegalChunk
 
 
 @dataclass(slots=True)
@@ -52,6 +54,36 @@ class JobRepository:
 
     def get(self, job_id: uuid.UUID) -> IngestionJob | None:
         return self._db.get(IngestionJob, job_id)
+
+    def get_many(self, job_ids: list[uuid.UUID]) -> list[IngestionJob]:
+        """Fetch many jobs in one round-trip.
+
+        Used by the bulk-status endpoint so a 25-file batch's polling
+        costs one SQL query instead of 25. Returns rows in arbitrary
+        order; callers should re-sort if they need to mirror the input
+        sequence.
+        """
+        if not job_ids:
+            return []
+        rows = self._db.execute(
+            select(IngestionJob).where(IngestionJob.id.in_(job_ids))
+        ).scalars()
+        return list(rows)
+
+    def count_chunks(self, document_id: uuid.UUID) -> int:
+        """How many indexed chunks the document landed.
+
+        Surfaces in the JobStatusResponse alongside the document_id so
+        the bulk-upload caller can verify ingestion produced text —
+        not just that it didn't crash. Cheap: single COUNT on the
+        ``legal_chunks`` index.
+        """
+        count = self._db.execute(
+            select(func.count())
+            .select_from(LegalChunk)
+            .where(LegalChunk.document_id == document_id)
+        ).scalar()
+        return int(count or 0)
 
     def mark_processing(self, job_id: uuid.UUID) -> None:
         job = self._db.get(IngestionJob, job_id)
