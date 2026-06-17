@@ -89,14 +89,17 @@ _FAREWELL_VARIANTS: tuple[str, ...] = (
 )
 
 # Meta — "who are you / what can you do" — a small capabilities tour.
+# CommonMark requires a BLANK LINE between a paragraph and a list, and
+# ``-`` prefix on each item — without those, ReactMarkdown collapses
+# the bullets onto one inline line.
 _META_VARIANTS: tuple[str, ...] = (
     (
         "I'm Legalite, an AI legal research assistant focused on Ghana law. "
-        "I can:\n"
-        "• Explain constitutional provisions and statutes in plain language\n"
-        "• Find and summarise relevant case law\n"
-        "• Walk you through legal procedures and requirements\n"
-        "• Compare or analyse specific cases\n\n"
+        "I can:\n\n"
+        "- Explain constitutional provisions and statutes in plain language\n"
+        "- Find and summarise relevant case law\n"
+        "- Walk you through legal procedures and requirements\n"
+        "- Compare or analyse specific cases\n\n"
         "Every answer I give is grounded in actual Ghana legal materials and "
         "includes citations so you can verify the source. I'm not a lawyer and "
         "I don't give legal advice — I help you research the law. What would "
@@ -107,9 +110,9 @@ _META_VARIANTS: tuple[str, ...] = (
         "from the Constitution, Acts of Parliament, Regulations, and case "
         "law that have been indexed into my knowledge base, and I cite "
         "every passage I rely on. Ask me things like:\n\n"
-        "• \"What does the Constitution say about citizenship?\"\n"
-        "• \"Explain the Labour Act's rules on dismissal.\"\n"
-        "• \"Find cases similar to a tenancy dispute in Accra.\"\n\n"
+        "- \"What does the Constitution say about citizenship?\"\n"
+        "- \"Explain the Labour Act's rules on dismissal.\"\n"
+        "- \"Find cases similar to a tenancy dispute in Accra.\"\n\n"
         "I'm a research tool, not a substitute for a lawyer. What can I "
         "look into for you?"
     ),
@@ -251,84 +254,150 @@ def _build_unclear_response(
 def _format_capability_tour(inventory: CorpusSnapshot) -> str:
     """Bulleted summary of doc_type counts.
 
-    Sorted by count descending so the headline coverage leads. Keeps
-    the user oriented around what the assistant is *actually* good
-    at, rather than what it might theoretically know.
+    Sorted by count descending so the headline coverage leads.
+    Renders as a CommonMark list — note the BLANK LINE between the
+    header and the bullets, and the ``-`` prefix on each item.
+    Without those two details ReactMarkdown collapses everything onto
+    one line.
     """
-    lines = ["Here's what I currently have access to:"]
+    pairs = sorted(
+        inventory.counts_by_doc_type.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    bullets = []
+    for doc_type, count in pairs:
+        plural = "" if count == 1 else "s"
+        bullets.append(f"- {count:,} {doc_type} document{plural}")
+    return "Here's what I currently have access to:\n\n" + "\n".join(bullets)
+
+
+# Concept-based seed questions per doc_type. We deliberately AVOID
+# title-specific shapes like "Summarize <title>" because:
+#
+#   (a) Vector search retrieves on chunk *content*, not metadata. A
+#       judgment titled "Republic v. Takyi" contains chunks about
+#       burden of proof, damages, etc. — not the parties' names. So
+#       "Summarize Republic v. Takyi" embeds to a query that has no
+#       reliable cosine match against the case's own chunks, and
+#       retrieval returns weak results from other cases.
+#   (b) The assistant then refuses, which makes the AI's *own*
+#       suggestion look broken to the user. Worse than no suggestion.
+#
+# Concept questions ("What's the burden of proof…?") match the
+# language judges actually USE, so retrieval finds relevant chunks
+# regardless of which specific case they're in.
+#
+# Adding title-aware retrieval (Postgres FTS on legal_documents.title
+# before falling through to vector search) is the right long-term
+# fix; once that lands we can safely surface "Summarize <title>"
+# again. Tracked separately.
+_CONCEPT_QUESTIONS: dict[str, tuple[str, ...]] = {
+    "constitution": (
+        "What does the Constitution say about citizenship?",
+        "Explain freedom of speech under Ghana's Constitution.",
+        "What fundamental rights does the Constitution protect?",
+    ),
+    "case_law": (
+        "What's the burden of proof in Ghana civil cases?",
+        "What principles apply to declaration of title to land?",
+        "What does Ghana case law say about damages in trespass?",
+        "How do courts in Ghana treat substituted service?",
+    ),
+    "act": (
+        "What does the Labour Act say about dismissal?",
+        "Explain the Companies Act's rules on incorporation.",
+        "What does the Rent Act provide on landlord obligations?",
+    ),
+    "regulation": (
+        "What regulations govern business registration in Ghana?",
+    ),
+    "sample_case": (
+        "What firm precedents discuss employment disputes?",
+        "Find similar internal cases on contract enforcement.",
+    ),
+    "memo": (
+        "What did our firm advise on the latest tenancy matter?",
+        "Summarize our recent memos on land disputes.",
+    ),
+}
+
+
+def _format_seed_questions(
+    inventory: CorpusSnapshot, *, question_seed: str
+) -> str:
+    """Build 2–3 example questions the corpus can plausibly answer.
+
+    Strategy:
+      1. Walk doc_types in descending count order — the user's
+         biggest categories get suggestions first.
+      2. For each type we recognise, pick a concept question
+         deterministically from a small per-type pool. Same
+         user-question seed → same suggestions, so debugging is
+         repeatable.
+      3. Cap at 3 suggestions to keep the reply short.
+
+    Returns a CommonMark-formatted block (header + blank line +
+    ``-`` bullets) or empty string if no doc_type matched any pool.
+    """
+    suggestions: list[str] = []
+    seen_pools: set[str] = set()  # avoid suggesting from same pool twice
+
     pairs = sorted(
         inventory.counts_by_doc_type.items(),
         key=lambda kv: kv[1],
         reverse=True,
     )
     for doc_type, count in pairs:
-        plural = "" if count == 1 else "s"
-        lines.append(f"• {count:,} {doc_type} document{plural}")
-    return "\n".join(lines)
-
-
-def _format_seed_questions(
-    inventory: CorpusSnapshot, *, question_seed: str
-) -> str:
-    """Build 2–3 example questions grounded in real corpus titles.
-
-    Templates are keyed off ``doc_type`` (case-insensitive). When a
-    type has at least one sample title we use it verbatim — the user
-    sees "Summarize Republic v. Danquah (2024 GHACC 285)" rather than
-    a generic placeholder, which makes the suggestion feel real.
-
-    ``question_seed`` is fed to the deterministic picker so the same
-    user question always renders the same suggestions — useful for
-    debugging "why didn't the example I just saw appear again" and
-    avoids the chatbot feeling rotating-billboard-y.
-    """
-    suggestions: list[str] = []
-    counts = inventory.counts_by_doc_type
-    samples = inventory.sample_titles_by_doc_type
-
-    # ─ Constitution
-    if _has(counts, "constitution"):
-        suggestions.append(
-            "What does the Constitution say about citizenship?"
-        )
-
-    # ─ Case Law — use a real title when available so the suggestion
-    #   feels grounded. Fall back to a generic shape when titles are
-    #   empty (shouldn't happen in practice but safe to guard).
-    case_titles = _samples_for(samples, ("case law", "case_law", "judgement", "judgment"))
-    if case_titles:
-        chosen = case_titles[_index_for(question_seed, len(case_titles))]
-        # Truncate excessively long judgment titles so the suggestion
-        # is one readable line.
-        if len(chosen) > 80:
-            chosen = chosen[:78].rstrip(" ,.-") + "…"
-        suggestions.append(f"Summarize {chosen}")
-    elif _has(counts, "case law", "case_law", "judgement", "judgment"):
-        suggestions.append("Find cases similar to a land dispute in Accra")
-
-    # ─ Acts / Regulations
-    if _has(counts, "act", "acts"):
-        # Use a real Act title when we have one — same pattern as cases.
-        act_titles = _samples_for(samples, ("act", "acts"))
-        if act_titles:
-            chosen = act_titles[_index_for(question_seed, len(act_titles))]
-            if len(chosen) > 80:
-                chosen = chosen[:78].rstrip(" ,.-") + "…"
-            suggestions.append(f"What does {chosen} say about dismissal?")
-        else:
-            suggestions.append("Explain the Labour Act's rules on dismissal.")
+        if count <= 0 or len(suggestions) >= 3:
+            continue
+        pool_key = _match_concept_key(doc_type)
+        if pool_key is None or pool_key in seen_pools:
+            continue
+        pool = _CONCEPT_QUESTIONS.get(pool_key)
+        if not pool:
+            continue
+        seen_pools.add(pool_key)
+        # Seed by (question + pool_key) so different pools rotate
+        # independently when the same user input fires multiple
+        # suggestion blocks.
+        idx = _index_for(f"{question_seed}|{pool_key}", len(pool))
+        suggestions.append(pool[idx])
 
     if not suggestions:
-        # Edge case: corpus exists but doesn't match any of our known
-        # templates. Offer the catch-all so the user still gets a hint.
-        suggestions.append("Ask about any Ghana law, case, or legal procedure.")
+        # Edge case: corpus exists but every doc_type is something we
+        # don't have a concept pool for. Offer the catch-all so the
+        # user still gets a hint rather than just the capability tour.
+        return ""
 
-    # Cap at 3 to keep the reply short.
-    suggestions = suggestions[:3]
-    lines = ["You could try asking:"]
-    for s in suggestions:
-        lines.append(f"• {s}")
-    return "\n".join(lines)
+    bullets = "\n".join(f"- {s}" for s in suggestions)
+    return "You could try asking:\n\n" + bullets
+
+
+def _match_concept_key(doc_type: str) -> str | None:
+    """Map a doc_type string to a ``_CONCEPT_QUESTIONS`` key.
+
+    The corpus stores ``doc_type`` as a free-text user choice
+    ("Constitution", "Case Law", "case_law", "Acts of Parliament",
+    etc.). We canonicalise here so the suggestion pools stay tiny.
+    """
+    lc = doc_type.lower().strip()
+    if "constitution" in lc:
+        return "constitution"
+    # Sample/firm precedents must match BEFORE the general "case"
+    # bucket — a Sample Case is firm-private context, not a published
+    # judgment, so a "Summarize" suggestion needs a different tone.
+    if "sample" in lc:
+        return "sample_case"
+    if "memo" in lc:
+        return "memo"
+    if "case" in lc or "judgement" in lc or "judgment" in lc or "precedent" in lc:
+        return "case_law"
+    if "regulation" in lc:
+        return "regulation"
+    if "act" in lc:
+        return "act"
+    return None
 
 
 def _has(counts: dict[str, int], *keys: str) -> bool:

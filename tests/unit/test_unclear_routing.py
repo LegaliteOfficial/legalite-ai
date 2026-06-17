@@ -101,15 +101,37 @@ def test_unclear_response_lists_corpus_categories() -> None:
     assert "could try asking" in body.lower()
 
 
-def test_unclear_response_seeds_questions_from_real_titles() -> None:
+def test_unclear_response_uses_concept_questions_not_titles() -> None:
+    """Title-specific suggestions ("Summarize X") were dropped because
+    vector retrieval can't reliably resolve a case from its title
+    alone. We suggest concept questions the corpus can actually
+    answer instead.
+    """
     snap = _snapshot(
-        counts={"Case Law": 24},
+        counts={"Case Law": 163},
         samples={"Case Law": ["Republic v. Danquah (2024 GHACC 285)"]},
     )
     body = _build_unclear_response("???", snap)
-    # The real title leaks into the suggestion verbatim so the user
-    # sees a question they can actually paste back.
-    assert "Republic v. Danquah" in body
+    # Should NOT contain "Summarize <title>" — that suggestion shape
+    # is explicitly retired.
+    assert "Summarize Republic" not in body
+    # Should still produce a concept-based suggestion block.
+    assert "could try asking" in body.lower()
+
+
+def test_unclear_response_renders_as_commonmark_list() -> None:
+    """The bullets must be true markdown lists (``-`` prefix + blank
+    line before the list) so ReactMarkdown can render them properly.
+    Single-newline ``•`` bullets collapse to one line in CommonMark.
+    """
+    snap = _snapshot(counts={"Case Law": 24, "Constitution": 100})
+    body = _build_unclear_response("hi?", snap)
+    # Bullets use ``- `` prefix, not ``• ``.
+    assert "- " in body
+    assert "• " not in body
+    # Header → blank line → bullets pattern. We check for the pattern
+    # by looking for an empty line followed by a bullet.
+    assert "\n\n- " in body
 
 
 def test_unclear_response_when_corpus_is_empty() -> None:
