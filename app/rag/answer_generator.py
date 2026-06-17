@@ -129,6 +129,15 @@ class AnswerGenerator:
                 tokens_out=tokens_out,
             )
 
+        # Phase B — enrich each structured citation with the source
+        # document_id / chunk_id / page_number from its underlying
+        # passage. The LLM emits ``citation_id`` as the 1-indexed
+        # passage position from the prompt; we round-trip that back to
+        # the actual passage object so the frontend can open the
+        # preview drawer directly. Out-of-range ids (model
+        # hallucination) are left with their nullable fields untouched.
+        _enrich_structured_citations(structured, passages)
+
         # Model explicitly refused → honor it and keep arrays empty.
         if REFUSAL_TEXT in structured.direct_answer:
             return GeneratedAnswer(
@@ -288,6 +297,42 @@ def _synthesize_legacy_answer(s: StructuredAnswer) -> str:
         parts.append(f"Confidence note: {s.confidence_assessment.strip()}")
     parts.append(DISCLAIMER)
     return "\n\n".join(parts).strip()
+
+
+def _enrich_structured_citations(
+    structured: StructuredAnswer,
+    passages: list[RetrievedPassage],
+) -> None:
+    """Backfill ``document_id`` / ``chunk_id`` / ``page_number`` onto
+    each StructuredCitation by looking up the underlying passage.
+
+    The LLM's ``citation_id`` is the 1-indexed position in the prompt's
+    passages list — see ``build_user_prompt``. We round-trip that index
+    back to the passage object so the front-end can open the source
+    preview directly from a structured row without doing its own index
+    arithmetic. Out-of-range ids (model hallucination) are left
+    untouched: the nullable fields stay None and the UI degrades to
+    "click does nothing" rather than rendering a broken link.
+
+    Mutates ``structured`` in place. Safe to call multiple times — it
+    only writes when the fields are unset.
+    """
+    for group in (
+        structured.applicable_law,
+        structured.relevant_public_cases,
+        structured.firm_similar_cases,
+    ):
+        for cite in group:
+            idx = cite.citation_id - 1
+            if idx < 0 or idx >= len(passages):
+                continue
+            p = passages[idx]
+            if cite.document_id is None:
+                cite.document_id = p.document_id
+            if cite.chunk_id is None:
+                cite.chunk_id = p.chunk_id
+            if cite.page_number is None:
+                cite.page_number = p.page_start
 
 
 def _empty_refusal(refusal_text: str) -> StructuredAnswer:

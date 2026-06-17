@@ -164,6 +164,8 @@ def _chunk_to_passage(chunk: LegalChunk, score: float) -> RetrievedPassage:
         document_origin=chunk.document_origin,
         start_char=chunk.start_char,
         end_char=chunk.end_char,
+        document_id=str(chunk.document_id),
+        chunk_id=str(chunk.id),
     )
 
 

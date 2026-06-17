@@ -58,6 +58,14 @@ class RetrievedPassage:
     # Phase 5 M9 — character offsets for UI source highlighting.
     start_char: int | None = None
     end_char: int | None = None
+    # Source-document linkage. ``document_id`` is the foreign key the
+    # frontend uses to hit GET /documents/{id} for the "view source"
+    # drawer. ``chunk_id`` lets the drawer scroll-to and highlight the
+    # exact passage that was cited (it matches LegalChunk.id, NOT the
+    # Qdrant point id in ``vector_id``). Both are None for legacy
+    # passages whose payload predates Phase B.
+    document_id: str | None = None
+    chunk_id: str | None = None
 
     @classmethod
     def from_hit(cls, hit: VectorHit) -> RetrievedPassage:
@@ -86,6 +94,8 @@ class RetrievedPassage:
             document_origin=p.get("document_origin"),
             start_char=p.get("start_char"),
             end_char=p.get("end_char"),
+            document_id=p.get("document_id"),
+            chunk_id=p.get("chunk_id"),
         )
 
 

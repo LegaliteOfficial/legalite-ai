@@ -82,6 +82,8 @@ def _passage_to_citation(p: RetrievedPassage, relevance: float) -> Citation:
         source_scope=p.source_scope or "global",  # type: ignore[arg-type]
         document_origin=p.document_origin,
         citation_span=span,
+        document_id=p.document_id,
+        chunk_id=p.chunk_id,
     )
 
 
@@ -99,6 +101,8 @@ def _passage_to_source(p: RetrievedPassage) -> SourceUsed:
         score=round(_passage_relevance(p), 4),
         source_scope=p.source_scope or "global",  # type: ignore[arg-type]
         document_origin=p.document_origin,
+        document_id=p.document_id,
+        chunk_id=p.chunk_id,
     )
 
 

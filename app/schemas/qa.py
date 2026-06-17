@@ -42,6 +42,13 @@ class Citation(BaseModel):
     document_origin: str | None = None
     # Phase 5 M9 — exact span for UI highlighting.
     citation_span: CitationSpan | None = None
+    # Phase B — source-document linkage. ``document_id`` is what the
+    # frontend hits via GET /documents/{id} when the user clicks
+    # "view source". ``chunk_id`` lets the preview drawer scroll-to
+    # and highlight the exact cited passage. Both are nullable for
+    # legacy passages whose vector payload predates this milestone.
+    document_id: str | None = None
+    chunk_id: str | None = None
 
 
 class SourceUsed(BaseModel):
@@ -56,6 +63,9 @@ class SourceUsed(BaseModel):
     score: float = 0.0
     source_scope: Literal["global", "tenant_private"] = "global"
     document_origin: str | None = None
+    # Phase B — see Citation.document_id / chunk_id above.
+    document_id: str | None = None
+    chunk_id: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +88,14 @@ class StructuredCitation(BaseModel):
     article: str = ""
     case_title: str = ""
     court: str = ""
+    # Phase B — populated by AnswerGenerator after the LLM call by
+    # looking up ``passages[citation_id - 1]``. Lets the frontend open
+    # the source preview drawer directly from a structured citation row
+    # without doing its own passage-index math. Nullable for legacy
+    # passages whose payload predates the document_id thread-through.
+    document_id: str | None = None
+    chunk_id: str | None = None
+    page_number: int | None = None
 
 
 class StructuredAnswer(BaseModel):
