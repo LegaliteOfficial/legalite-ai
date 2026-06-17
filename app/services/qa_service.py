@@ -51,6 +51,7 @@ from app.rag.query_rewriter import QueryRewriter
 from app.rag.streaming import SSEEvent
 from app.rag.reranker import BaseReranker, build_reranker
 from app.schemas.qa import AskResponse, Citation, StructuredAnswer
+from app.services.corpus_inventory import CorpusInventoryService
 from app.vector_store.qdrant_client import QdrantVectorStore
 
 logger = get_logger(__name__)
@@ -90,6 +91,10 @@ class QAService:
         self._memory = LegalMemory(ChatRepository(db))
         self._planner = planner or QueryPlanner()
         self._conversational = conversational or ConversationalResponder()
+        # Module-level cache lives behind this; constructing it per
+        # request is cheap because the actual Postgres roundtrip only
+        # fires on the first call after the cache TTL expires.
+        self._corpus_inventory = CorpusInventoryService(db)
 
     def ask(
         self,
@@ -133,8 +138,25 @@ class QAService:
             # Conversational short-circuit — greetings, thanks, "who are
             # you", etc. skip retrieval and the answer generator
             # entirely. Returns instantly with a templated reply.
+            #
+            # CONVERSATIONAL_UNCLEAR additionally consumes the corpus
+            # inventory so the response includes a capability tour +
+            # seed questions ("here's what I can actually answer").
+            # Inventory hit is cached at module level, so warm-path
+            # calls don't touch Postgres.
             if plan.intent in CONVERSATIONAL_INTENTS:
-                conv = self._conversational.respond(question, plan.intent)
+                inventory = None
+                if plan.intent == QueryIntent.CONVERSATIONAL_UNCLEAR:
+                    try:
+                        inventory = self._corpus_inventory.get()
+                    except Exception:  # noqa: BLE001
+                        # Inventory failures must NEVER block a reply.
+                        # The responder degrades to its empty-corpus
+                        # fallback if ``inventory`` is None.
+                        logger.exception("qa.inventory_failed")
+                conv = self._conversational.respond(
+                    question, plan.intent, inventory=inventory
+                )
                 msg_id = self._memory.append_assistant(
                     sid,
                     conv.answer,

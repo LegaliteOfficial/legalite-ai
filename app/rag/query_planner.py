@@ -58,6 +58,10 @@ class QueryIntent(StrEnum):
     CONVERSATIONAL_FAREWELL = "conversational_farewell"
     CONVERSATIONAL_META = "conversational_meta"
     CONVERSATIONAL_SMALL_TALK = "conversational_small_talk"
+    # Catch-all for short, non-legal queries that don't match a specific
+    # conversational pattern — typos, ambiguous fragments, "Am i goo?".
+    # Routes to a capability-aware response instead of a canned refusal.
+    CONVERSATIONAL_UNCLEAR = "conversational_unclear"
 
 
 CONVERSATIONAL_INTENTS: frozenset[QueryIntent] = frozenset(
@@ -66,8 +70,17 @@ CONVERSATIONAL_INTENTS: frozenset[QueryIntent] = frozenset(
         QueryIntent.CONVERSATIONAL_FAREWELL,
         QueryIntent.CONVERSATIONAL_META,
         QueryIntent.CONVERSATIONAL_SMALL_TALK,
+        QueryIntent.CONVERSATIONAL_UNCLEAR,
     }
 )
+
+
+# Below this character count, a query without legal substance or a
+# specific conversational pattern match is treated as ambiguous noise
+# rather than a real legal question. Tuned empirically: most genuine
+# legal questions are well over 40 characters; most typos / fragments
+# are well under.
+_UNCLEAR_MAX_CHARS = 40
 
 
 @dataclass(slots=True, frozen=True)
@@ -356,6 +369,21 @@ class QueryPlanner:
                 scored[rule.intent] = (new_score, [*signals, rule.label])
 
         if not scored:
+            # Short, non-legal queries that didn't match a specific
+            # conversational rule (typos like "Am i goo?", fragments
+            # like "?", ambiguous noise) are routed to the unclear
+            # responder instead of being thrown at the legal LLM,
+            # which would just produce the canned refusal.
+            if not legal_present and len(text) < _UNCLEAR_MAX_CHARS:
+                return QueryPlan(
+                    intent=QueryIntent.CONVERSATIONAL_UNCLEAR,
+                    confidence=0.6,
+                    source="heuristic",
+                    rationale=(
+                        f"short non-legal text ({len(text)} chars); "
+                        "routing to capability-aware response"
+                    ),
+                )
             return QueryPlan(
                 intent=QueryIntent.GENERAL_LEGAL_QA,
                 confidence=0.4,

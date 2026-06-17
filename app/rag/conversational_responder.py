@@ -38,6 +38,7 @@ from app.rag.confidence_engine import Confidence
 from app.rag.prompt_builder import DISCLAIMER
 from app.rag.query_planner import QueryIntent
 from app.schemas.qa import StructuredAnswer
+from app.services.corpus_inventory import CorpusSnapshot
 
 
 @dataclass(slots=True)
@@ -129,6 +130,24 @@ _SMALL_TALK_VARIANTS: tuple[str, ...] = (
     ),
 )
 
+# UNCLEAR opener — gently acknowledges we didn't parse the input. The
+# meat of the response (capability tour + seed questions) is generated
+# dynamically from the corpus snapshot, so these are short prefaces.
+_UNCLEAR_OPENERS: tuple[str, ...] = (
+    "I'm not quite sure what you're asking — could you rephrase?",
+    "I didn't catch that. Want to try rephrasing your question?",
+    "Hmm, I'm not sure how to take that. Could you say a bit more?",
+)
+
+# Fallback used when the corpus snapshot is empty (nothing's been
+# uploaded yet) — happens in fresh dev environments. We can't suggest
+# real titles, so we steer toward common entry-point questions.
+_EMPTY_CORPUS_HINT = (
+    "Once Ghana legal materials are uploaded (Constitution, Acts, "
+    "Regulations, case law), I'll be able to answer questions grounded "
+    "in those sources. Until then I can chat or describe what I do."
+)
+
 
 def _pick(question: str, variants: tuple[str, ...]) -> str:
     """Deterministic variant selection. Same question → same reply.
@@ -145,10 +164,19 @@ class ConversationalResponder:
     """Translates a conversational intent into a complete answer.
 
     No external dependencies — no LLM, no Qdrant, no DB. Constructable
-    anywhere in a test without mocks.
+    anywhere in a test without mocks. The optional ``inventory`` arg on
+    :meth:`respond` lets the UNCLEAR branch tour what the corpus
+    actually contains; pass ``None`` to fall back to a generic
+    "what I can do" reply.
     """
 
-    def respond(self, question: str, intent: QueryIntent) -> ConversationalAnswer:
+    def respond(
+        self,
+        question: str,
+        intent: QueryIntent,
+        *,
+        inventory: CorpusSnapshot | None = None,
+    ) -> ConversationalAnswer:
         if intent == QueryIntent.CONVERSATIONAL_GREETING:
             body = _pick(question, _GREETING_VARIANTS)
         elif intent == QueryIntent.CONVERSATIONAL_FAREWELL:
@@ -157,6 +185,8 @@ class ConversationalResponder:
             body = _pick(question, _META_VARIANTS)
         elif intent == QueryIntent.CONVERSATIONAL_SMALL_TALK:
             body = _pick(question, _SMALL_TALK_VARIANTS)
+        elif intent == QueryIntent.CONVERSATIONAL_UNCLEAR:
+            body = _build_unclear_response(question, inventory)
         else:
             # Defensive: caller routed wrong intent here. Reply neutrally
             # rather than crash — this path should be unreachable in
@@ -180,6 +210,165 @@ class ConversationalResponder:
             structured=structured,
             intent=intent,
         )
+
+
+# ── Capability-aware UNCLEAR builder ─────────────────────────────────────
+
+
+def _build_unclear_response(
+    question: str, inventory: CorpusSnapshot | None
+) -> str:
+    """Compose a capability-aware reply for an UNCLEAR intent.
+
+    Structure:
+
+        <opener>
+
+        Here's what I currently have access to:
+          • 1,961 Constitution sections
+          • 24 Case Law judgments
+          ...
+
+        You could try asking:
+          • What does the Constitution say about citizenship?
+          • Summarize Republic v. Danquah (2024 GHACC 285)
+          • ...
+
+    Falls back gracefully when the inventory is empty or missing.
+    """
+    opener = _pick(question, _UNCLEAR_OPENERS)
+    if inventory is None or inventory.is_empty:
+        return f"{opener}\n\n{_EMPTY_CORPUS_HINT}"
+
+    tour = _format_capability_tour(inventory)
+    seeds = _format_seed_questions(inventory, question_seed=question)
+    parts = [opener, tour]
+    if seeds:
+        parts.append(seeds)
+    return "\n\n".join(parts)
+
+
+def _format_capability_tour(inventory: CorpusSnapshot) -> str:
+    """Bulleted summary of doc_type counts.
+
+    Sorted by count descending so the headline coverage leads. Keeps
+    the user oriented around what the assistant is *actually* good
+    at, rather than what it might theoretically know.
+    """
+    lines = ["Here's what I currently have access to:"]
+    pairs = sorted(
+        inventory.counts_by_doc_type.items(),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    for doc_type, count in pairs:
+        plural = "" if count == 1 else "s"
+        lines.append(f"• {count:,} {doc_type} document{plural}")
+    return "\n".join(lines)
+
+
+def _format_seed_questions(
+    inventory: CorpusSnapshot, *, question_seed: str
+) -> str:
+    """Build 2–3 example questions grounded in real corpus titles.
+
+    Templates are keyed off ``doc_type`` (case-insensitive). When a
+    type has at least one sample title we use it verbatim — the user
+    sees "Summarize Republic v. Danquah (2024 GHACC 285)" rather than
+    a generic placeholder, which makes the suggestion feel real.
+
+    ``question_seed`` is fed to the deterministic picker so the same
+    user question always renders the same suggestions — useful for
+    debugging "why didn't the example I just saw appear again" and
+    avoids the chatbot feeling rotating-billboard-y.
+    """
+    suggestions: list[str] = []
+    counts = inventory.counts_by_doc_type
+    samples = inventory.sample_titles_by_doc_type
+
+    # ─ Constitution
+    if _has(counts, "constitution"):
+        suggestions.append(
+            "What does the Constitution say about citizenship?"
+        )
+
+    # ─ Case Law — use a real title when available so the suggestion
+    #   feels grounded. Fall back to a generic shape when titles are
+    #   empty (shouldn't happen in practice but safe to guard).
+    case_titles = _samples_for(samples, ("case law", "case_law", "judgement", "judgment"))
+    if case_titles:
+        chosen = case_titles[_index_for(question_seed, len(case_titles))]
+        # Truncate excessively long judgment titles so the suggestion
+        # is one readable line.
+        if len(chosen) > 80:
+            chosen = chosen[:78].rstrip(" ,.-") + "…"
+        suggestions.append(f"Summarize {chosen}")
+    elif _has(counts, "case law", "case_law", "judgement", "judgment"):
+        suggestions.append("Find cases similar to a land dispute in Accra")
+
+    # ─ Acts / Regulations
+    if _has(counts, "act", "acts"):
+        # Use a real Act title when we have one — same pattern as cases.
+        act_titles = _samples_for(samples, ("act", "acts"))
+        if act_titles:
+            chosen = act_titles[_index_for(question_seed, len(act_titles))]
+            if len(chosen) > 80:
+                chosen = chosen[:78].rstrip(" ,.-") + "…"
+            suggestions.append(f"What does {chosen} say about dismissal?")
+        else:
+            suggestions.append("Explain the Labour Act's rules on dismissal.")
+
+    if not suggestions:
+        # Edge case: corpus exists but doesn't match any of our known
+        # templates. Offer the catch-all so the user still gets a hint.
+        suggestions.append("Ask about any Ghana law, case, or legal procedure.")
+
+    # Cap at 3 to keep the reply short.
+    suggestions = suggestions[:3]
+    lines = ["You could try asking:"]
+    for s in suggestions:
+        lines.append(f"• {s}")
+    return "\n".join(lines)
+
+
+def _has(counts: dict[str, int], *keys: str) -> bool:
+    """Case-insensitive substring match against any of the keys."""
+    lc_keys = [k.lower() for k in keys]
+    for doc_type, n in counts.items():
+        if n <= 0:
+            continue
+        dt = doc_type.lower()
+        for key in lc_keys:
+            if key in dt:
+                return True
+    return False
+
+
+def _samples_for(
+    samples: dict[str, list[str]], keys: tuple[str, ...]
+) -> list[str]:
+    """Flatten sample titles whose doc_type matches any key (case-insensitive)."""
+    lc_keys = tuple(k.lower() for k in keys)
+    out: list[str] = []
+    for doc_type, titles in samples.items():
+        dt = doc_type.lower()
+        if any(k in dt for k in lc_keys):
+            out.extend(titles)
+    return out
+
+
+def _index_for(seed: str, n: int) -> int:
+    """Deterministic index into a list of size ``n``.
+
+    Same seed → same index, but two different user questions land on
+    different sample titles. Avoids the assistant feeling like a
+    broken record without going random (random would break tests and
+    debug screenshots).
+    """
+    if n <= 0:
+        return 0
+    digest = hashlib.md5(seed.strip().lower().encode("utf-8")).digest()
+    return digest[0] % n
 
 
 __all__ = [
