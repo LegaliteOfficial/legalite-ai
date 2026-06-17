@@ -80,10 +80,14 @@ services:
 
   redis:
     # Phase 5 M4 — broker for the Arq ingestion worker.
+    # Local Redis runs INSIDE the compose network only; the host port
+    # is intentionally not published. The app + worker connect via the
+    # ``REDIS_URL`` env var which today points at Railway's managed
+    # Redis. The container is kept around so the depends_on graph
+    # still resolves cleanly — removing it would mean editing app +
+    # worker service defs to drop the dependency.
     image: redis:7-alpine
     container_name: legalite-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:

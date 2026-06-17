@@ -94,6 +94,18 @@ class Settings(BaseSettings):
     ingestion_max_retries: int = 3
     ingestion_job_timeout_seconds: int = 1800
 
+    # Bulk upload — how many PDFs a single ``POST /upload-law/bulk``
+    # request may carry. Tuned for:
+    #   - HTTP body size (25 × 50 MB = ~1.25 GB upper bound; well
+    #     under most reverse-proxy/CDN limits)
+    #   - Per-request commit budget (one INSERT into ingestion_jobs
+    #     per file; sequential commits are ~10ms each)
+    #   - Worker queue throughput — 25 enqueues fan out cleanly to
+    #     the existing Arq worker without backpressure
+    # Increase cautiously: the multipart parser holds every file in
+    # memory before the handler runs.
+    bulk_upload_max_files: int = 25
+
     # Cloud object storage (Supabase Storage). When ``supabase_url`` and
     # ``supabase_service_key`` are BOTH set, the ingestion path uploads
     # each PDF to ``supabase_storage_bucket`` and the /documents/{id}
