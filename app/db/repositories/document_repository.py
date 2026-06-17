@@ -89,6 +89,21 @@ class DocumentRepository:
         self._db.flush()
         return doc
 
+    def set_remote_storage_key(
+        self, document_id: uuid.UUID, remote_storage_key: str
+    ) -> None:
+        """Persist the Supabase Storage key for the original PDF.
+
+        Called after a successful object-store upload during ingestion.
+        Failures upstream leave the column NULL — the API surface then
+        gracefully degrades to text-only viewing.
+        """
+        doc = self._db.get(LegalDocument, document_id)
+        if doc is None:
+            return
+        doc.remote_storage_key = remote_storage_key
+        self._db.flush()
+
     def mark_document_status(
         self, document_id: uuid.UUID, status: str, notes: str | None = None
     ) -> None:

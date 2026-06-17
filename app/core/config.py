@@ -94,6 +94,22 @@ class Settings(BaseSettings):
     ingestion_max_retries: int = 3
     ingestion_job_timeout_seconds: int = 1800
 
+    # Cloud object storage (Supabase Storage). When ``supabase_url`` and
+    # ``supabase_service_key`` are BOTH set, the ingestion path uploads
+    # each PDF to ``supabase_storage_bucket`` and the /documents/{id}
+    # endpoint returns a short-lived signed URL alongside the extracted
+    # text. When either is unset the system degrades gracefully —
+    # ingestion still succeeds, ``remote_storage_key`` stays NULL, and
+    # the endpoint returns text-only.
+    supabase_url: str | None = None
+    supabase_service_key: str | None = None
+    supabase_storage_bucket: str = "legal-documents"
+    # Signed-URL TTLs. Global docs are public-record law; the URL can
+    # safely live long enough to be cacheable. Tenant-private docs MUST
+    # use a short TTL — if a URL leaks, the blast radius is bounded.
+    storage_signed_url_ttl_global_seconds: int = 86400  # 24 hours
+    storage_signed_url_ttl_private_seconds: int = 300   # 5 minutes
+
     # Service-to-service authentication (legalite-backend → legalite-ai).
     # When set, the gateway must sign tenant headers with HMAC-SHA256 and
     # include x-legalite-signature + x-legalite-timestamp. When None

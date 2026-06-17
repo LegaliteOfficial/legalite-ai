@@ -40,6 +40,7 @@ from app.ingestion.embedding_service import EmbeddingService
 from app.ingestion.legal_chunker import LegalChunker
 from app.ingestion.pdf_parser import ParsedPdf, PdfParser
 from app.services.citation_resolution_service import CitationResolutionService
+from app.services.storage_service import StorageService
 from app.vector_store.qdrant_client import QdrantVectorStore, VectorPayload
 
 logger = get_logger(__name__)
@@ -56,6 +57,7 @@ class IngestionService:
         vector_store: QdrantVectorStore | None = None,
         case_extractor: CaseMetadataExtractor | None = None,
         citation_extractor: CitationExtractor | None = None,
+        storage: StorageService | None = None,
     ) -> None:
         self._db = db
         self._repo = DocumentRepository(db)
@@ -66,6 +68,10 @@ class IngestionService:
         self._vector_store = vector_store  # injected lazily to avoid import-time qdrant connect
         self._case_extractor = case_extractor or CaseMetadataExtractor()
         self._citation_extractor = citation_extractor or CitationExtractor()
+        # Optional: when Supabase Storage env is unset, this constructs
+        # in disabled mode and every upload silently no-ops. See
+        # StorageService.upload for the graceful-degradation contract.
+        self._storage = storage if storage is not None else StorageService()
 
     def ingest_pdf(
         self,
@@ -189,6 +195,26 @@ class IngestionService:
             ]
             self._repo.add_chunks(document_id, records)
             document.page_count = parsed.page_count
+
+            # Upload the original PDF to Supabase Storage AFTER chunks
+            # land in Postgres. Order matters: if the storage upload
+            # fails we still have a fully-queryable document — only the
+            # "view original" UX degrades. Doing it the other way round
+            # would leak orphan objects on Postgres errors.
+            if self._storage.enabled:
+                scope_label = (
+                    "tenant"
+                    if visibility_scope is VisibilityScope.TENANT_PRIVATE
+                    else "global"
+                )
+                remote_key = self._storage.build_key(
+                    scope=scope_label,
+                    document_id=document_id,
+                    filename=original_filename,
+                    organization_id=org_id,
+                )
+                if self._storage.upload(key=remote_key, data=file_bytes):
+                    self._repo.set_remote_storage_key(document_id, remote_key)
 
             # Case-law branch: persist structured metadata + citation edges.
             detected_law_type = chunks[0].law_type if chunks else None

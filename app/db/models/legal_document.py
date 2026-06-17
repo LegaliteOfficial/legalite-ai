@@ -31,8 +31,13 @@ class LegalDocument(Base, TimestampMixin):
     effective_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Original filename uploaded
     source_filename: Mapped[str] = mapped_column(String(512), nullable=False)
-    # On-disk path under UPLOAD_DIR
+    # On-disk path under UPLOAD_DIR — the working copy the worker reads.
     storage_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # Cloud-object-storage key (Supabase Storage). NULL when storage was
+    # not configured at ingest time or when the upload step failed. The
+    # /documents/{id} endpoint converts this into a short-lived signed
+    # URL — clients never see the raw key.
+    remote_storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     page_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # ingested | failed | processing
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
