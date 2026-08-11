@@ -34,6 +34,16 @@ Event sequence:
       completed  — terminal. Full AskResponse mirror, matches the
                            non-streaming response shape exactly.
 
+    error               — terminal, can appear at any point after
+                           ``retrieval_started``. Once the first byte of
+                           an SSE response is sent, FastAPI can no longer
+                           turn a mid-pipeline exception into a proper
+                           500 — the connection would just drop instead.
+                           This event exists so a failure still reaches
+                           the client with an explanation rather than a
+                           silently truncated stream. ``data.message`` is
+                           safe to show to the user as-is.
+
 The non-streaming response shape (``AskResponse``) is unchanged.
 """
 

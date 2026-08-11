@@ -147,6 +147,13 @@ class QAService:
         which may differ from what the deltas already showed — the client
         MUST replace whatever it rendered from the deltas with the
         refusal event's payload, not merge the two.
+
+        Once the first byte of an SSE response has been sent, FastAPI can
+        no longer turn an exception into a proper 500 — the connection
+        would just drop, leaving the client with a truncated stream and
+        no explanation. Everything after the ``retrieval_started`` yield
+        below therefore runs inside a try/except that turns any failure
+        into a terminal ``error`` event instead.
         """
         t0 = time.perf_counter()
         sid = self._memory.get_or_create_session(session_id, tenant=tenant)
@@ -159,80 +166,100 @@ class QAService:
                 data={"session_id": str(sid), "question_chars": len(question)},
             )
 
-            prep = self._prepare(question, sid, tenant=tenant, t0=t0)
-            if isinstance(prep, AskResponse):
-                # Planner refusal or conversational short-circuit — no LLM
-                # call happens on this path, so there is nothing to stream.
-                response = prep
+            try:
+                prep = self._prepare(question, sid, tenant=tenant, t0=t0)
+                if isinstance(prep, AskResponse):
+                    # Planner refusal or conversational short-circuit — no
+                    # LLM call happens on this path, so there is nothing
+                    # to stream.
+                    response = prep
+                    yield SSEEvent(
+                        event="sources_found",
+                        data={"count": 0, "scopes": {"global": 0, "tenant_private": 0}},
+                    )
+                    yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
+                    return
+                plan, scope_label, memory, passages, cross = prep
+
                 yield SSEEvent(
                     event="sources_found",
-                    data={"count": 0, "scopes": {"global": 0, "tenant_private": 0}},
-                )
-                yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
-                return
-            plan, scope_label, memory, passages, cross = prep
-
-            yield SSEEvent(
-                event="sources_found",
-                data={
-                    "count": len(passages),
-                    "scopes": _passage_scope_distribution(passages),
-                },
-            )
-
-            result: GeneratedAnswer | None = None
-            with traced(
-                "qa.generate",
-                intent=plan.intent.value,
-                scope=scope_label,
-                passage_count=len(passages),
-            ):
-                for item in self._generator.generate_stream(
-                    question, passages, memory=memory.turns
-                ):
-                    if isinstance(item, str):
-                        yield SSEEvent(event="answer_delta", data={"text": item})
-                    else:
-                        result = item
-            assert result is not None  # generate_stream always yields exactly one GeneratedAnswer
-
-            response = self._finalize(sid, question, plan, scope_label, passages, cross, result, t0)
-
-            if result.refused:
-                yield SSEEvent(
-                    event="refused",
                     data={
-                        "answer": response.answer,
-                        "confidence": response.confidence,
-                        "structured_answer": response.structured_answer.model_dump()
-                        if response.structured_answer
-                        else None,
-                        "session_id": response.session_id,
-                        "query_intent": response.query_intent,
-                        # Refusals still persist a chat_messages row (see
-                        # _finalize), so feedback (thumbs up/down) works on
-                        # refused answers the same as on normal ones.
-                        "message_id": response.message_id,
+                        "count": len(passages),
+                        "scopes": _passage_scope_distribution(passages),
                     },
                 )
-                return
 
-            sa = response.structured_answer
-            assert sa is not None  # non-refused _finalize_from_raw always sets this
-            yield SSEEvent(event="reasoning", data={"summary": response.reasoning_summary})
-            yield SSEEvent(
-                event="citations",
-                data={
-                    "applicable_law": [c.model_dump() for c in sa.applicable_law],
-                    "relevant_public_cases": [c.model_dump() for c in sa.relevant_public_cases],
-                    "firm_similar_cases": [c.model_dump() for c in sa.firm_similar_cases],
-                    "citation_ids": sa.citations,
-                },
-            )
-            yield SSEEvent(
-                event="completed",
-                data=response.model_dump(mode="json"),
-            )
+                result: GeneratedAnswer | None = None
+                with traced(
+                    "qa.generate",
+                    intent=plan.intent.value,
+                    scope=scope_label,
+                    passage_count=len(passages),
+                ):
+                    for item in self._generator.generate_stream(
+                        question, passages, memory=memory.turns
+                    ):
+                        if isinstance(item, str):
+                            yield SSEEvent(event="answer_delta", data={"text": item})
+                        else:
+                            result = item
+                assert result is not None  # generate_stream always yields exactly one GeneratedAnswer
+
+                response = self._finalize(
+                    sid, question, plan, scope_label, passages, cross, result, t0
+                )
+
+                if result.refused:
+                    yield SSEEvent(
+                        event="refused",
+                        data={
+                            "answer": response.answer,
+                            "confidence": response.confidence,
+                            "structured_answer": response.structured_answer.model_dump()
+                            if response.structured_answer
+                            else None,
+                            "session_id": response.session_id,
+                            "query_intent": response.query_intent,
+                            # Refusals still persist a chat_messages row
+                            # (see _finalize), so feedback (thumbs
+                            # up/down) works on refused answers the same
+                            # as on normal ones.
+                            "message_id": response.message_id,
+                        },
+                    )
+                    return
+
+                sa = response.structured_answer
+                assert sa is not None  # non-refused _finalize_from_raw always sets this
+                yield SSEEvent(event="reasoning", data={"summary": response.reasoning_summary})
+                yield SSEEvent(
+                    event="citations",
+                    data={
+                        "applicable_law": [c.model_dump() for c in sa.applicable_law],
+                        "relevant_public_cases": [
+                            c.model_dump() for c in sa.relevant_public_cases
+                        ],
+                        "firm_similar_cases": [
+                            c.model_dump() for c in sa.firm_similar_cases
+                        ],
+                        "citation_ids": sa.citations,
+                    },
+                )
+                yield SSEEvent(
+                    event="completed",
+                    data=response.model_dump(mode="json"),
+                )
+            except Exception:
+                logger.exception("qa.ask_stream_failed", question_chars=len(question))
+                yield SSEEvent(
+                    event="error",
+                    data={
+                        "message": (
+                            "The AI service hit an unexpected error while answering. "
+                            "Please try again."
+                        ),
+                    },
+                )
 
     def get_or_create_session(
         self,
