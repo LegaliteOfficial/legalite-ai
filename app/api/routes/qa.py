@@ -4,15 +4,37 @@ Backward compatible: requests without `session_id` still work; responses
 keep all v1 fields and add v2 fields (`sources_used`, `reasoning_summary`,
 `session_id`) and v3 fields (`structured_answer`, `query_intent`).
 
-Phase 5 M7 — passing ``?stream=true`` opts into Server-Sent Events:
+Phase 5 M7 (+ token-streaming follow-up) — passing ``?stream=true`` opts
+into Server-Sent Events:
 
     POST /ask?stream=true
     Accept: text/event-stream
 
-Streaming sends incremental events around the existing single-call
-pipeline (``retrieval_started``, ``sources_found``, ``reasoning``,
-``direct_answer``, ``citations``, ``completed`` / ``refused``). The
-non-streaming response shape is unchanged.
+Event sequence:
+
+    retrieval_started  — fired immediately, before retrieval runs.
+    sources_found       — passage count + scope breakdown, right after
+                           retrieval, before the LLM call starts.
+    answer_delta         (repeated) — ``direct_answer`` text as OpenAI
+                           generates it. Zero or more of these fire while
+                           the model is still producing output.
+    then either:
+      refused            — terminal. The post-generation safety checks
+                           (grounding / consistency) rejected the answer
+                           AFTER it finished generating. Its ``answer`` /
+                           ``structured_answer`` are canonical and may
+                           differ from what the ``answer_delta`` events
+                           already showed — clients MUST replace whatever
+                           they rendered from the deltas with this
+                           event's payload, not merge the two.
+      or:
+      reasoning           — one-shot summary once generation passed the
+                           safety checks.
+      citations            — structured citation arrays.
+      completed  — terminal. Full AskResponse mirror, matches the
+                           non-streaming response shape exactly.
+
+The non-streaming response shape (``AskResponse``) is unchanged.
 """
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status

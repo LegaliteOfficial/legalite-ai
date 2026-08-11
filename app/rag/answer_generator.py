@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from openai import OpenAI
@@ -42,6 +43,7 @@ from app.rag.prompt_builder import (
     build_user_prompt,
 )
 from app.rag.retriever import RetrievedPassage
+from app.rag.stream_extractor import JSONStringFieldStreamer
 from app.schemas.qa import StructuredAnswer, StructuredCitation
 
 logger = get_logger(__name__)
@@ -112,6 +114,96 @@ class AnswerGenerator:
         tokens_in = getattr(usage, "prompt_tokens", 0) or 0
         tokens_out = getattr(usage, "completion_tokens", 0) or 0
 
+        return self._finalize_from_raw(
+            passages, pre, raw_content, latency_ms, tokens_in, tokens_out
+        )
+
+    def generate_stream(
+        self,
+        question: str,
+        passages: list[RetrievedPassage],
+        *,
+        memory: list[MemoryTurn] | None = None,
+    ) -> Iterator[str | GeneratedAnswer]:
+        """Same pipeline as :meth:`generate`, but yields ``direct_answer``
+        text as the model produces it, then yields the final
+        :class:`GeneratedAnswer` once the response is complete and has
+        passed the same post-generation safety checks as the
+        non-streaming path (``_finalize_from_raw`` — grounding /
+        consistency / refusal-sentence detection are identical).
+
+        Streamed deltas are provisional. If the yielded ``GeneratedAnswer``
+        has ``refused=True``, the deltas already sent to the caller may
+        not match ``answer`` (e.g. the post-hoc grounding check in
+        ``assess_final`` rejected an answer that read fine token-by-token
+        but never cited a passage). Callers MUST be prepared to retract
+        whatever they rendered from the deltas in that case — see the
+        ``refused`` SSE event in ``QAService.ask_stream``.
+        """
+        annotate_authority(passages)
+
+        pre = self._confidence.assess_before_generation(passages)
+        if pre.refused:
+            yield _refusal(passages, pre, reason=pre.reason)
+            return
+
+        user_prompt = build_user_prompt(question, passages, memory=memory)
+        extractor = JSONStringFieldStreamer()
+        raw_parts: list[str] = []
+        tokens_in = 0
+        tokens_out = 0
+        t0 = time.perf_counter()
+        try:
+            with observe(llm_latency):
+                stream = self._client.chat.completions.create(
+                    model=self._model,
+                    temperature=0.1,
+                    response_format={"type": "json_object"},
+                    stream=True,
+                    stream_options={"include_usage": True},
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+                for chunk in stream:
+                    if chunk.usage is not None:
+                        tokens_in = chunk.usage.prompt_tokens or 0
+                        tokens_out = chunk.usage.completion_tokens or 0
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta.content
+                    if not delta:
+                        continue
+                    raw_parts.append(delta)
+                    text = extractor.feed(delta)
+                    if text:
+                        yield text
+        except Exception:
+            logger.exception("answer.llm_stream_failed", model=self._model)
+            yield _refusal(passages, pre, reason="LLM call failed")
+            return
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+
+        raw_content = "".join(raw_parts).strip()
+        yield self._finalize_from_raw(
+            passages, pre, raw_content, latency_ms, tokens_in, tokens_out
+        )
+
+    def _finalize_from_raw(
+        self,
+        passages: list[RetrievedPassage],
+        pre: ConfidenceAssessment,
+        raw_content: str,
+        latency_ms: int,
+        tokens_in: int,
+        tokens_out: int,
+    ) -> GeneratedAnswer:
+        """Parse the model's raw JSON text and apply every post-generation
+        safety check. Shared by :meth:`generate` and :meth:`generate_stream`
+        so the streaming and non-streaming paths can never drift apart on
+        what counts as a refusal.
+        """
         structured, parse_error = _parse_structured(raw_content)
         if structured is None:
             logger.warning(

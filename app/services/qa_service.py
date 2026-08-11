@@ -38,8 +38,8 @@ from app.rag.answer_generator import AnswerGenerator, GeneratedAnswer
 from app.rag.citation_formatter import format_citations, format_sources
 from app.rag.conversational_responder import ConversationalResponder
 from app.rag.hybrid_retriever import HybridRetriever
-from app.rag.legal_memory import LegalMemory
-from app.rag.multi_document_reasoner import MultiDocumentReasoner
+from app.rag.legal_memory import LegalMemory, MemoryContext
+from app.rag.multi_document_reasoner import CrossDocResult, MultiDocumentReasoner
 from app.rag.prompt_builder import DISCLAIMER, REFUSAL_TEXT
 from app.rag.query_planner import (
     CONVERSATIONAL_INTENTS,
@@ -48,6 +48,7 @@ from app.rag.query_planner import (
     QueryPlanner,
 )
 from app.rag.query_rewriter import QueryRewriter
+from app.rag.retriever import RetrievedPassage
 from app.rag.streaming import SSEEvent
 from app.rag.reranker import BaseReranker, build_reranker
 from app.schemas.qa import AskResponse, Citation, StructuredAnswer
@@ -109,100 +110,10 @@ class QAService:
             session_id=str(sid),
             tenant_org=str(tenant.organization_id) if tenant and tenant.organization_id else None,
         ):
-            memory = self._memory.load_recent(sid)
-            self._memory.append_user(sid, question)
-
-            # Phase 5 M2 — classify intent. We log the result for observability
-            # and short-circuit on INSUFFICIENT_CONTEXT (ambiguous pronoun
-            # with no memory). Other intents still flow through the unified
-            # retriever; a future increment can branch CASE_SIMILARITY /
-            # CASE_SUMMARY to dedicated pipelines without changing this contract.
-            plan = self._planner.plan(question, has_memory=bool(memory.turns))
-            logger.info(
-                "qa.planned",
-                intent=plan.intent.value,
-                confidence=plan.confidence,
-                source=plan.source,
-                rationale=plan.rationale,
-            )
-            if plan.intent == QueryIntent.INSUFFICIENT_CONTEXT:
-                record_refusal("planner")
-                return _planner_refusal(sid, plan)
-
-            org_label = (
-                str(tenant.organization_id) if tenant and tenant.organization_id else None
-            )
-            scope_label = "tenant" if org_label else "anonymous"
-            record_tenant_request(org_label, "/ask")
-
-            # Conversational short-circuit — greetings, thanks, "who are
-            # you", etc. skip retrieval and the answer generator
-            # entirely. Returns instantly with a templated reply.
-            #
-            # CONVERSATIONAL_UNCLEAR additionally consumes the corpus
-            # inventory so the response includes a capability tour +
-            # seed questions ("here's what I can actually answer").
-            # Inventory hit is cached at module level, so warm-path
-            # calls don't touch Postgres.
-            if plan.intent in CONVERSATIONAL_INTENTS:
-                inventory = None
-                if plan.intent == QueryIntent.CONVERSATIONAL_UNCLEAR:
-                    try:
-                        inventory = self._corpus_inventory.get()
-                    except Exception:  # noqa: BLE001
-                        # Inventory failures must NEVER block a reply.
-                        # The responder degrades to its empty-corpus
-                        # fallback if ``inventory`` is None.
-                        logger.exception("qa.inventory_failed")
-                conv = self._conversational.respond(
-                    question, plan.intent, inventory=inventory
-                )
-                msg_id = self._memory.append_assistant(
-                    sid,
-                    conv.answer,
-                    metadata={
-                        "confidence": conv.confidence,
-                        "confidence_score": 1.0,
-                        "refused": False,
-                        "citations": [],
-                        "conversational": True,
-                        "query_intent": plan.intent.value,
-                    },
-                )
-                total_ms = int((time.perf_counter() - t0) * 1000)
-                logger.info(
-                    "qa.answered.conversational",
-                    intent=plan.intent.value,
-                    total_latency_ms=total_ms,
-                )
-                return AskResponse(
-                    answer=conv.answer,
-                    citations=[],
-                    confidence=conv.confidence,
-                    sources_used=[],
-                    reasoning_summary=plan.rationale,
-                    session_id=str(sid),
-                    structured_answer=conv.structured,
-                    query_intent=plan.intent.value,
-                    query_intent_confidence=plan.confidence,
-                    message_id=str(msg_id),
-                )
-
-            with (
-                traced(
-                    "qa.retrieve",
-                    intent=plan.intent.value,
-                    scope=scope_label,
-                ),
-                observe(retrieval_latency, scope=scope_label),
-            ):
-                cross = self._reasoner.gather(question, tenant=tenant)
-            passages = cross.passages
-
-            # Source distribution gauge — useful for spotting if tenants
-            # accidentally start retrieving only their private corpus.
-            global_n = sum(1 for p in passages if p.visibility_scope == "global")
-            update_source_ratio(global_n, len(passages) - global_n)
+            prep = self._prepare(question, sid, tenant=tenant, t0=t0)
+            if isinstance(prep, AskResponse):
+                return prep
+            plan, scope_label, memory, passages, cross = prep
 
             with traced(
                 "qa.generate",
@@ -214,85 +125,7 @@ class QAService:
                     question, passages, memory=memory.turns
                 )
 
-            # Outcome metrics.
-            if result.refused:
-                record_refusal("generator")
-            record_ask(
-                scope=scope_label,
-                intent=plan.intent.value,
-                confidence=result.confidence,
-            )
-
-            citations: list[Citation] = (
-                [] if result.refused else format_citations(result.used_passages)
-            )
-            sources = (
-                [] if result.refused else format_sources(result.used_passages)
-            )
-
-            msg_id = self._memory.append_assistant(
-                sid,
-                result.answer,
-                metadata={
-                    "confidence": result.confidence,
-                    "confidence_score": result.confidence_score,
-                    "refused": result.refused,
-                    "citations": [c.model_dump() for c in citations],
-                    "query_intent": plan.intent.value,
-                },
-            )
-
-            total_ms = int((time.perf_counter() - t0) * 1000)
-            logger.info(
-                "qa.answered",
-                confidence=result.confidence,
-                refused=result.refused,
-                retrieved=len(passages),
-                bucket_counts=cross.bucket_counts,
-                tokens_in=result.tokens_in,
-                tokens_out=result.tokens_out,
-                gen_latency_ms=result.latency_ms,
-                total_latency_ms=total_ms,
-            )
-
-            # Phase A — per-request trace covering the full pipeline.
-            # Logged at INFO so it's visible without flipping log levels;
-            # field names match the "Retrieval diagnostics" list in the
-            # Phase A spec so anyone debugging a "why did it refuse"
-            # incident can grep one log line and see every stage.
-            logger.info(
-                "qa.trace",
-                original_query=question[:512],
-                query_variants=cross.query_variants,
-                intent=plan.intent.value,
-                intent_confidence=plan.confidence,
-                retrieved_count=len(passages),
-                top_retrieval_scores=[
-                    round(p.original_score, 3) if p.original_score is not None else None
-                    for p in passages[:5]
-                ],
-                top_rerank_scores=[
-                    round(p.rerank_score, 3) if p.rerank_score is not None else None
-                    for p in passages[:5]
-                ],
-                final_confidence=result.confidence,
-                final_confidence_score=round(result.confidence_score, 3),
-                refused=result.refused,
-                citation_count=len(citations),
-            )
-
-            return AskResponse(
-                answer=result.answer,
-                citations=citations,
-                confidence=result.confidence,
-                sources_used=sources,
-                reasoning_summary=result.reasoning_summary,
-                session_id=str(sid),
-                structured_answer=result.structured,
-                query_intent=plan.intent.value,
-                query_intent_confidence=plan.confidence,
-                message_id=str(msg_id),
-            )
+            return self._finalize(sid, question, plan, scope_label, passages, cross, result, t0)
 
     def ask_stream(
         self,
@@ -301,73 +134,105 @@ class QAService:
         *,
         tenant: TenantContext | None = None,
     ) -> Iterator[SSEEvent]:
-        """SSE event stream for the same pipeline as :meth:`ask`.
+        """SSE event stream that runs the real pipeline live rather than
+        replaying a finished :meth:`ask` response.
 
-        Implementation note: we deliberately reuse :meth:`ask` rather than
-        re-implementing the pipeline. The terminal ``completed`` /
-        ``refused`` event carries the full AskResponse. Intermediate events
-        announce milestones (retrieval started, sources found, reasoning)
-        so the client can render progress immediately.
-
-        Calling this method does NOT issue a second LLM call.
+        Once retrieval hands off to the LLM, ``answer_delta`` events carry
+        ``direct_answer`` text as OpenAI generates it — see
+        ``AnswerGenerator.generate_stream``. Those deltas are provisional:
+        the same post-generation safety checks that gate the non-streaming
+        path (grounding, refusal-sentence detection) still run on the
+        *complete* answer once the model finishes. If they reject it, a
+        terminal ``refused`` event fires with the canonical refusal text,
+        which may differ from what the deltas already showed — the client
+        MUST replace whatever it rendered from the deltas with the
+        refusal event's payload, not merge the two.
         """
-        sid_uuid = self._memory.get_or_create_session(session_id)
-        sid = str(sid_uuid)
-
-        yield SSEEvent(
-            event="retrieval_started",
-            data={"session_id": sid, "question_chars": len(question)},
-        )
-
-        response = self.ask(question, session_id=session_id, tenant=tenant)
-
-        # We can't fan out events mid-pipeline without a second LLM call,
-        # but we CAN emit the structured milestones derived from the
-        # finished response. These let the UI render the answer in
-        # sections rather than as one block.
-        yield SSEEvent(
-            event="sources_found",
-            data={
-                "count": len(response.sources_used),
-                "scopes": _scope_distribution(response.sources_used),
-            },
-        )
-
-        if response.structured_answer is None or response.confidence == "low":
-            # Refusal terminal event — preserves the refusal contract.
+        t0 = time.perf_counter()
+        sid = self._memory.get_or_create_session(session_id, tenant=tenant)
+        with structlog.contextvars.bound_contextvars(
+            session_id=str(sid),
+            tenant_org=str(tenant.organization_id) if tenant and tenant.organization_id else None,
+        ):
             yield SSEEvent(
-                event="refused",
+                event="retrieval_started",
+                data={"session_id": str(sid), "question_chars": len(question)},
+            )
+
+            prep = self._prepare(question, sid, tenant=tenant, t0=t0)
+            if isinstance(prep, AskResponse):
+                # Planner refusal or conversational short-circuit — no LLM
+                # call happens on this path, so there is nothing to stream.
+                response = prep
+                yield SSEEvent(
+                    event="sources_found",
+                    data={"count": 0, "scopes": {"global": 0, "tenant_private": 0}},
+                )
+                yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
+                return
+            plan, scope_label, memory, passages, cross = prep
+
+            yield SSEEvent(
+                event="sources_found",
                 data={
-                    "answer": response.answer,
-                    "confidence": response.confidence,
-                    "structured_answer": response.structured_answer.model_dump()
-                    if response.structured_answer
-                    else None,
-                    "session_id": response.session_id,
-                    "query_intent": response.query_intent,
+                    "count": len(passages),
+                    "scopes": _passage_scope_distribution(passages),
                 },
             )
-            return
 
-        sa = response.structured_answer
-        yield SSEEvent(event="reasoning", data={"summary": response.reasoning_summary})
-        yield SSEEvent(
-            event="direct_answer",
-            data={"direct_answer": sa.direct_answer},
-        )
-        yield SSEEvent(
-            event="citations",
-            data={
-                "applicable_law": [c.model_dump() for c in sa.applicable_law],
-                "relevant_public_cases": [c.model_dump() for c in sa.relevant_public_cases],
-                "firm_similar_cases": [c.model_dump() for c in sa.firm_similar_cases],
-                "citation_ids": sa.citations,
-            },
-        )
-        yield SSEEvent(
-            event="completed",
-            data=response.model_dump(mode="json"),
-        )
+            result: GeneratedAnswer | None = None
+            with traced(
+                "qa.generate",
+                intent=plan.intent.value,
+                scope=scope_label,
+                passage_count=len(passages),
+            ):
+                for item in self._generator.generate_stream(
+                    question, passages, memory=memory.turns
+                ):
+                    if isinstance(item, str):
+                        yield SSEEvent(event="answer_delta", data={"text": item})
+                    else:
+                        result = item
+            assert result is not None  # generate_stream always yields exactly one GeneratedAnswer
+
+            response = self._finalize(sid, question, plan, scope_label, passages, cross, result, t0)
+
+            if result.refused:
+                yield SSEEvent(
+                    event="refused",
+                    data={
+                        "answer": response.answer,
+                        "confidence": response.confidence,
+                        "structured_answer": response.structured_answer.model_dump()
+                        if response.structured_answer
+                        else None,
+                        "session_id": response.session_id,
+                        "query_intent": response.query_intent,
+                        # Refusals still persist a chat_messages row (see
+                        # _finalize), so feedback (thumbs up/down) works on
+                        # refused answers the same as on normal ones.
+                        "message_id": response.message_id,
+                    },
+                )
+                return
+
+            sa = response.structured_answer
+            assert sa is not None  # non-refused _finalize_from_raw always sets this
+            yield SSEEvent(event="reasoning", data={"summary": response.reasoning_summary})
+            yield SSEEvent(
+                event="citations",
+                data={
+                    "applicable_law": [c.model_dump() for c in sa.applicable_law],
+                    "relevant_public_cases": [c.model_dump() for c in sa.relevant_public_cases],
+                    "firm_similar_cases": [c.model_dump() for c in sa.firm_similar_cases],
+                    "citation_ids": sa.citations,
+                },
+            )
+            yield SSEEvent(
+                event="completed",
+                data=response.model_dump(mode="json"),
+            )
 
     def get_or_create_session(
         self,
@@ -377,11 +242,216 @@ class QAService:
     ) -> uuid.UUID:
         return self._memory.get_or_create_session(session_id, tenant=tenant)
 
+    def _prepare(
+        self,
+        question: str,
+        sid: uuid.UUID,
+        *,
+        tenant: TenantContext | None,
+        t0: float,
+    ) -> (
+        AskResponse
+        | tuple[QueryPlan, str, MemoryContext, list[RetrievedPassage], CrossDocResult]
+    ):
+        """Session/memory setup, intent planning, and retrieval — the part
+        of the pipeline that is identical whether the answer ends up
+        streamed or not. Returns an early :class:`AskResponse` for the
+        planner-refusal and conversational short-circuit paths (neither
+        calls the answer LLM, so there's nothing for a caller to stream);
+        otherwise returns ``(plan, scope_label, memory, passages, cross)``
+        for the caller to hand to the generator.
+        """
+        memory = self._memory.load_recent(sid)
+        self._memory.append_user(sid, question)
 
-def _scope_distribution(sources: list) -> dict[str, int]:
+        # Phase 5 M2 — classify intent. We log the result for observability
+        # and short-circuit on INSUFFICIENT_CONTEXT (ambiguous pronoun
+        # with no memory). Other intents still flow through the unified
+        # retriever; a future increment can branch CASE_SIMILARITY /
+        # CASE_SUMMARY to dedicated pipelines without changing this contract.
+        plan = self._planner.plan(question, has_memory=bool(memory.turns))
+        logger.info(
+            "qa.planned",
+            intent=plan.intent.value,
+            confidence=plan.confidence,
+            source=plan.source,
+            rationale=plan.rationale,
+        )
+        if plan.intent == QueryIntent.INSUFFICIENT_CONTEXT:
+            record_refusal("planner")
+            return _planner_refusal(sid, plan)
+
+        org_label = str(tenant.organization_id) if tenant and tenant.organization_id else None
+        scope_label = "tenant" if org_label else "anonymous"
+        record_tenant_request(org_label, "/ask")
+
+        # Conversational short-circuit — greetings, thanks, "who are
+        # you", etc. skip retrieval and the answer generator entirely.
+        # Returns instantly with a templated reply.
+        #
+        # CONVERSATIONAL_UNCLEAR additionally consumes the corpus
+        # inventory so the response includes a capability tour + seed
+        # questions ("here's what I can actually answer"). Inventory hit
+        # is cached at module level, so warm-path calls don't touch
+        # Postgres.
+        if plan.intent in CONVERSATIONAL_INTENTS:
+            inventory = None
+            if plan.intent == QueryIntent.CONVERSATIONAL_UNCLEAR:
+                try:
+                    inventory = self._corpus_inventory.get()
+                except Exception:  # noqa: BLE001
+                    # Inventory failures must NEVER block a reply. The
+                    # responder degrades to its empty-corpus fallback if
+                    # ``inventory`` is None.
+                    logger.exception("qa.inventory_failed")
+            conv = self._conversational.respond(question, plan.intent, inventory=inventory)
+            msg_id = self._memory.append_assistant(
+                sid,
+                conv.answer,
+                metadata={
+                    "confidence": conv.confidence,
+                    "confidence_score": 1.0,
+                    "refused": False,
+                    "citations": [],
+                    "conversational": True,
+                    "query_intent": plan.intent.value,
+                },
+            )
+            total_ms = int((time.perf_counter() - t0) * 1000)
+            logger.info(
+                "qa.answered.conversational",
+                intent=plan.intent.value,
+                total_latency_ms=total_ms,
+            )
+            return AskResponse(
+                answer=conv.answer,
+                citations=[],
+                confidence=conv.confidence,
+                sources_used=[],
+                reasoning_summary=plan.rationale,
+                session_id=str(sid),
+                structured_answer=conv.structured,
+                query_intent=plan.intent.value,
+                query_intent_confidence=plan.confidence,
+                message_id=str(msg_id),
+            )
+
+        with (
+            traced("qa.retrieve", intent=plan.intent.value, scope=scope_label),
+            observe(retrieval_latency, scope=scope_label),
+        ):
+            cross = self._reasoner.gather(question, tenant=tenant)
+        passages = cross.passages
+
+        # Source distribution gauge — useful for spotting if tenants
+        # accidentally start retrieving only their private corpus.
+        global_n = sum(1 for p in passages if p.visibility_scope == "global")
+        update_source_ratio(global_n, len(passages) - global_n)
+
+        return plan, scope_label, memory, passages, cross
+
+    def _finalize(
+        self,
+        sid: uuid.UUID,
+        question: str,
+        plan: QueryPlan,
+        scope_label: str,
+        passages: list[RetrievedPassage],
+        cross: CrossDocResult,
+        result: GeneratedAnswer,
+        t0: float,
+    ) -> AskResponse:
+        """Citation formatting, memory persistence, and response assembly —
+        the part of the pipeline after generation that is identical
+        whether ``result`` came from :meth:`AnswerGenerator.generate` or
+        the terminal item of :meth:`AnswerGenerator.generate_stream`.
+        """
+        if result.refused:
+            record_refusal("generator")
+        record_ask(scope=scope_label, intent=plan.intent.value, confidence=result.confidence)
+
+        citations: list[Citation] = (
+            [] if result.refused else format_citations(result.used_passages)
+        )
+        sources = [] if result.refused else format_sources(result.used_passages)
+
+        msg_id = self._memory.append_assistant(
+            sid,
+            result.answer,
+            metadata={
+                "confidence": result.confidence,
+                "confidence_score": result.confidence_score,
+                "refused": result.refused,
+                "citations": [c.model_dump() for c in citations],
+                "query_intent": plan.intent.value,
+            },
+        )
+
+        total_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info(
+            "qa.answered",
+            confidence=result.confidence,
+            refused=result.refused,
+            retrieved=len(passages),
+            bucket_counts=cross.bucket_counts,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            gen_latency_ms=result.latency_ms,
+            total_latency_ms=total_ms,
+        )
+
+        # Phase A — per-request trace covering the full pipeline. Logged
+        # at INFO so it's visible without flipping log levels; field
+        # names match the "Retrieval diagnostics" list in the Phase A
+        # spec so anyone debugging a "why did it refuse" incident can
+        # grep one log line and see every stage.
+        logger.info(
+            "qa.trace",
+            original_query=question[:512],
+            query_variants=cross.query_variants,
+            intent=plan.intent.value,
+            intent_confidence=plan.confidence,
+            retrieved_count=len(passages),
+            top_retrieval_scores=[
+                round(p.original_score, 3) if p.original_score is not None else None
+                for p in passages[:5]
+            ],
+            top_rerank_scores=[
+                round(p.rerank_score, 3) if p.rerank_score is not None else None
+                for p in passages[:5]
+            ],
+            final_confidence=result.confidence,
+            final_confidence_score=round(result.confidence_score, 3),
+            refused=result.refused,
+            citation_count=len(citations),
+        )
+
+        return AskResponse(
+            answer=result.answer,
+            citations=citations,
+            confidence=result.confidence,
+            sources_used=sources,
+            reasoning_summary=result.reasoning_summary,
+            session_id=str(sid),
+            structured_answer=result.structured,
+            query_intent=plan.intent.value,
+            query_intent_confidence=plan.confidence,
+            message_id=str(msg_id),
+        )
+
+
+def _passage_scope_distribution(passages: list[RetrievedPassage]) -> dict[str, int]:
+    """Scope breakdown straight off retrieval.
+
+    Uses ``visibility_scope`` (set by the retriever) rather than
+    ``source_scope`` (set later by ``app.rag.authority.annotate`` inside
+    the generator) because this runs before generation — before
+    ``annotate`` has had a chance to run. Both carry the same
+    "global" | "tenant_private" values.
+    """
     counts: dict[str, int] = {"global": 0, "tenant_private": 0}
-    for s in sources:
-        scope = getattr(s, "source_scope", "global") or "global"
+    for p in passages:
+        scope = p.visibility_scope or "global"
         counts[scope] = counts.get(scope, 0) + 1
     return counts
 
