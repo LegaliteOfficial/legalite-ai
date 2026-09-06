@@ -2,10 +2,16 @@
 # =============================================================================
 # Take a Qdrant snapshot of the production collection and upload it to S3.
 #
+# Works unchanged against Qdrant Cloud or a self-hosted instance — it only
+# talks to the standard snapshot REST API, authenticated with an api-key
+# header. Point QDRANT_URL at whichever one is current.
+#
 # Usage:  ./scripts/backup_qdrant.sh
 # Env vars:
-#   QDRANT_URL              (required) — e.g. https://….cloud.qdrant.io
-#   QDRANT_API_KEY          (required) — Qdrant Cloud API key
+#   QDRANT_URL              (required) — e.g. http://qdrant:6333 (self-hosted)
+#                            or https://….cloud.qdrant.io (Qdrant Cloud)
+#   QDRANT_API_KEY          (required) — must match QDRANT__SERVICE__API_KEY
+#                            on the target instance
 #   QDRANT_COLLECTION       (default: ghana_legal_docs)
 #   BACKUP_S3_BUCKET        (required) — s3://bucket/path destination
 #   BACKUP_RETENTION_DAYS   (default: 30) — local-file age before pruning

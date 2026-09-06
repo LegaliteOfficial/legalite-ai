@@ -458,7 +458,9 @@ populates the `legal_cases` row.
 ```bash
 # 1. Configure environment
 cp .env.example .env
-# Edit .env: set OPENAI_API_KEY, QDRANT_URL/API_KEY, POSTGRES_PASSWORD
+# Edit .env: set OPENAI_API_KEY, POSTGRES_PASSWORD, and QDRANT_API_KEY
+# (generate one with `openssl rand -hex 32` — it's shared by the app and
+# the self-hosted qdrant service, see docs/QDRANT_SELF_HOSTED.md)
 
 # 2. Bring up the stack (app + postgres + qdrant)
 docker compose up --build
@@ -1058,7 +1060,7 @@ Test totals at HEAD: **126 passing** across three buckets.
 | --- | --- | --- | --- |
 | Unit | `tests/unit/` | 123 | Pure functions: chunker, citation engine, RRF fusion, reranker fallback, prompt safety, structured-output parsing, authority classification, query planner, citation resolver, span linking, telemetry primitives, tenant context parsing, tenant filter shape, ingestion validation, job repository. |
 | Security | `tests/security/` | 2 | Tenant isolation CI gate — fails the build if `tenant_isolation_score < 1.0`. Runs the eval scenario end-to-end against the real `build_tenant_filter` primitive. |
-| Integration | `tests/integration/` | 0 | Reserved. No live-network tests yet (OpenAI quota + Qdrant Cloud auth required). |
+| Integration | `tests/integration/` | 0 | Reserved. No live-network tests yet (OpenAI quota + a running Qdrant instance required — `docker compose up -d qdrant`). |
 
 Tenant isolation eval runner (also wired as a security test) prints the
 filter shape and per-query leak report; exit code 0 only when score = 1.0:
@@ -1099,7 +1101,7 @@ for the full list. The most important:
 | `OPENAI_API_KEY` | Required. |
 | `OPENAI_LLM_MODEL` | Default `gpt-4o-mini`. |
 | `OPENAI_EMBEDDING_MODEL` | `text-embedding-3-small` (1536-d). |
-| `QDRANT_URL` / `QDRANT_API_KEY` | Local Compose or Qdrant Cloud. |
+| `QDRANT_URL` / `QDRANT_API_KEY` | Self-hosted via Docker Compose (see [docs/QDRANT_SELF_HOSTED.md](docs/QDRANT_SELF_HOSTED.md)). |
 | `QDRANT_COLLECTION` | Defaults to `ghana_legal_docs`. |
 | `RAG_TOP_K` | Passages retrieved per question. |
 | `RAG_MIN_CONFIDENCE_SCORE` | Below this → automatic refusal. |

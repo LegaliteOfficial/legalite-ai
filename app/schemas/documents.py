@@ -29,3 +29,4 @@ class DocumentSummary(BaseModel):
 class HealthResponse(BaseModel):
     status: str = Field(default="ok")
     version: str = "0.1.0"
+    qdrant: str = Field(default="ok", description="'ok' or 'unavailable'")

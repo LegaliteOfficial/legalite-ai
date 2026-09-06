@@ -293,6 +293,36 @@ def build_tenant_filter(
 
 
 _store: QdrantVectorStore | None = None
+_health_client: QdrantClient | None = None
+_HEALTH_CHECK_TIMEOUT_SECONDS = 3
+
+
+def qdrant_is_reachable() -> bool:
+    """Fast, side-effect-free connectivity check for the /health endpoint.
+
+    Deliberately does NOT go through :func:`get_vector_store` — that path's
+    first call runs ``ensure_collection()`` on a client configured with a
+    120s timeout (needed to tolerate slow batched upserts), which would make
+    /health hang for up to two minutes during a real network stall, long
+    past Docker's or Railway's own healthcheck timeout. This uses a
+    dedicated client with a short timeout and never creates or mutates the
+    collection. Never raises.
+    """
+    global _health_client
+    if _health_client is None:
+        settings = get_settings()
+        _health_client = QdrantClient(
+            url=settings.qdrant_url,
+            api_key=settings.qdrant_api_key or None,
+            prefer_grpc=False,
+            timeout=_HEALTH_CHECK_TIMEOUT_SECONDS,
+        )
+    try:
+        _health_client.get_collections()
+        return True
+    except Exception:  # noqa: BLE001
+        logger.error("qdrant.health_check_failed", exc_info=True)
+        return False
 
 
 def get_vector_store() -> QdrantVectorStore:

@@ -7,7 +7,7 @@ different way:
 | Surface | What's there | Worst-case loss | Recovery primitive |
 | --- | --- | --- | --- |
 | **Neon Postgres** | `legal_documents`, `legal_chunks` metadata, `legal_cases`, `case_citations`, `chat_sessions`/`chat_messages`, `ingestion_jobs`, + every legalite-backend table (users, orgs, etc.) | Tenant data, firm Q&A history, audit trail | Neon Point-in-Time Recovery (PITR) |
-| **Qdrant collection** (`ghana_legal_docs`) | Every vector + payload (the content of every chunk) | All retrieval breaks; re-ingest needed | Qdrant Cloud snapshots |
+| **Qdrant collection** (`ghana_legal_docs`) | Every vector + payload (the content of every chunk) | All retrieval breaks; re-ingest needed | Qdrant snapshots (self-hosted, see [docs/QDRANT_SELF_HOSTED.md](QDRANT_SELF_HOSTED.md)) |
 | **Uploads volume** (`/app/data/uploads`) | Original PDFs as uploaded by firms | Cannot re-ingest from source after Qdrant loss | Object-storage sync (S3 / GCS / R2) |
 
 The three surfaces drift independently. A Postgres restore without a
@@ -88,7 +88,7 @@ The script:
 
 Schedule: **every 6 h** during business hours, **daily off-hours**. Each
 snapshot is the full collection — incremental snapshots aren't supported
-by Qdrant Cloud as of this writing, so set retention based on disk
+by Qdrant as of this writing, so set retention based on disk
 budget (typically 7 d hot + 30 d archive).
 
 ### Restore a snapshot
