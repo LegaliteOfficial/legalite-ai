@@ -52,6 +52,17 @@ services:
       redis:
         condition: service_healthy
     command: ["arq", "app.jobs.worker.WorkerSettings"]
+    healthcheck:
+      # Overrides the Dockerfile's HTTP healthcheck (curl localhost:8000/health)
+      # inherited from the shared image — the worker has no HTTP server, only
+      # an arq loop. Pings Redis directly instead: a worker that can't reach
+      # its queue is definitionally unhealthy (this is what caught the
+      # earlier unreachable-Redis crash-loop).
+      test: ["CMD", "python3", "-c", "import os,redis; redis.from_url(os.environ['REDIS_URL'], socket_connect_timeout=3).ping()"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
   postgres:
