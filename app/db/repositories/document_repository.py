@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from sqlalchemy import select, text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.telemetry import record_postgres_failure
 from app.db.enums import ConfidentialityLevel, VisibilityScope
 from app.db.models.legal_chunk import LegalChunk
 from app.db.models.legal_document import LegalDocument
@@ -44,6 +46,13 @@ class ChunkRecord:
     # Phase 5 M9 — character offsets within source page text.
     start_char: int | None = None
     end_char: int | None = None
+    # Phase 2.5 bug fix: generated up front (not left to the ORM's insert-
+    # time default) so the SAME id can be threaded into the Qdrant
+    # VectorPayload.chunk_id before this row is ever inserted — previously
+    # VectorPayload.chunk_id was a throwaway uuid4() with no relation to
+    # the row's real eventual id, so every citation's chunk_id was
+    # unresolvable against legal_chunks. See ingestion_service.py.
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
 
 
 class DocumentRepository:
@@ -158,6 +167,7 @@ class DocumentRepository:
     ) -> list[LegalChunk]:
         rows = [
             LegalChunk(
+                id=c.id,
                 document_id=document_id,
                 content=c.content,
                 title=c.title,
@@ -246,14 +256,22 @@ class DocumentRepository:
             "ORDER BY score DESC LIMIT :limit"
         )
 
-        rows = self._db.execute(text(sql), params).all()
+        try:
+            rows = self._db.execute(text(sql), params).all()
+        except SQLAlchemyError:
+            record_postgres_failure("keyword_search")
+            raise
         if not rows:
             return []
 
         id_to_score = {row[0]: float(row[1]) for row in rows}
-        chunks = self._db.scalars(
-            select(LegalChunk).where(LegalChunk.id.in_(list(id_to_score.keys())))
-        ).all()
+        try:
+            chunks = self._db.scalars(
+                select(LegalChunk).where(LegalChunk.id.in_(list(id_to_score.keys())))
+            ).all()
+        except SQLAlchemyError:
+            record_postgres_failure("keyword_search")
+            raise
         # Preserve score order
         chunk_by_id = {c.id: c for c in chunks}
         return [

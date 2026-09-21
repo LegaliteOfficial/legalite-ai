@@ -1,0 +1,225 @@
+# CI for legalite-ai.
+#
+# There was no CI pipeline at all before this file — every "CI fails on X"
+# claim in README.md was aspirational documentation, not an enforced gate.
+# This is a first pass, deliberately scoped:
+#
+#   unit         — every PR + push to main/develop. Fast, no paid APIs.
+#                  Requires: nothing external (dummy OPENAI_API_KEY; a
+#                  throwaway Postgres service container).
+#   integration  — every PR + push to main/develop. Exercises the real
+#                  tenant-isolation path against a live Qdrant + Postgres
+#                  (tests/integration/, gated by LEGALITE_INTEGRATION_ENABLED
+#                  in the test suite itself). Uses deterministic fake
+#                  embeddings (see tests/integration/conftest.py) — no
+#                  OpenAI calls, no paid-API cost, safe to run on every PR.
+#   evaluation   — push to main/develop + manual dispatch ONLY, never on
+#                  arbitrary PRs. This is the one job that costs real money
+#                  (live OpenAI calls via evaluation/runner.py) and needs a
+#                  real secret. Requires the repo secret OPENAI_API_KEY to
+#                  be set in Settings → Secrets — the job fails with a clear
+#                  message if it's missing rather than silently no-op'ing.
+#                  Expected runtime: ~10-15s per case (retrieval + query
+#                  rewriting + generation) — sample.json has 20 cases today,
+#                  so budget several minutes. Only 3 of the 20 are
+#                  verified: true (see evaluation/datasets/README.md), so
+#                  read the "VERIFIED baseline" section of the output, not
+#                  "ALL CASES" — the latter is exploratory only. Failure
+#                  here does not block merges today.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+  workflow_dispatch:
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  unit:
+    name: Unit tests + lint + types
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legalite
+          POSTGRES_PASSWORD: legalite_ci
+          POSTGRES_DB: legalite_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legalite -d legalite_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Fake but well-formed — unit tests stub Qdrant/embeddings (see
+      # tests/unit/*, which use in-process fakes per Phase 0 findings) and
+      # never make a real OpenAI call. A real key is not required here.
+      OPENAI_API_KEY: sk-ci-dummy-not-a-real-key
+      DATABASE_URL: postgresql://legalite:legalite_ci@localhost:5432/legalite_ci
+      QDRANT_URL: http://localhost:6333
+      QDRANT_API_KEY: ci-dummy-key
+      APP_ENV: development
+      # Default is /app/data/uploads — meaningful inside the app's own
+      # Docker image, not on a bare GitHub-hosted runner (root-level /app
+      # isn't writable there). Any test that exercises IngestionService
+      # needs this pointed somewhere real.
+      UPLOAD_DIR: ${{ github.workspace }}/.ci-uploads
+      # Deliberately NOT set: LEGALITE_GATEWAY_SECRET. Setting it would
+      # switch verify_gateway_signature() into strict HMAC mode, which
+      # several existing tests don't construct signed requests for — that's
+      # a pre-existing test/environment mismatch unrelated to this change,
+      # not something to paper over by injecting a developer's personal
+      # .env value into CI. Leaving it unset reproduces the repo's actual
+      # default (legacy trust mode), not a workaround.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: Run database migrations
+        run: alembic upgrade head
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: mypy
+        run: mypy app
+        continue-on-error: true # first CI run — unblock while the baseline is established; tighten once green
+
+      - name: Unit tests
+        run: pytest -q --ignore=tests/integration
+
+  integration:
+    name: Live-Qdrant integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legalite
+          POSTGRES_PASSWORD: legalite_ci
+          POSTGRES_DB: legalite_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legalite -d legalite_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        env:
+          QDRANT__SERVICE__API_KEY: ci-integration-key
+        ports:
+          - 6333:6333
+    env:
+      OPENAI_API_KEY: sk-ci-dummy-not-a-real-key # unused: tests/integration/conftest.py injects deterministic fake embeddings
+      DATABASE_URL: postgresql://legalite:legalite_ci@localhost:5432/legalite_ci
+      QDRANT_URL: http://localhost:6333
+      QDRANT_API_KEY: ci-integration-key
+      APP_ENV: development
+      LEGALITE_INTEGRATION_ENABLED: "true"
+      UPLOAD_DIR: ${{ github.workspace }}/.ci-uploads
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: Run database migrations
+        run: alembic upgrade head
+
+      - name: Wait for Qdrant
+        run: |
+          for i in $(seq 1 20); do
+            curl -sf -H "api-key: $QDRANT_API_KEY" "$QDRANT_URL/collections" && exit 0
+            sleep 2
+          done
+          echo "Qdrant never became reachable" >&2
+          exit 1
+
+      - name: Integration tests (live Qdrant + Postgres)
+        run: pytest -q tests/integration
+
+  evaluation:
+    name: Live evaluation (answer quality — costs real OpenAI usage)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: legalite
+          POSTGRES_PASSWORD: legalite_ci
+          POSTGRES_DB: legalite_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U legalite -d legalite_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      qdrant:
+        image: qdrant/qdrant:v1.12.4
+        env:
+          QDRANT__SERVICE__API_KEY: ci-eval-key
+        ports:
+          - 6333:6333
+    env:
+      DATABASE_URL: postgresql://legalite:legalite_ci@localhost:5432/legalite_ci
+      QDRANT_URL: http://localhost:6333
+      QDRANT_API_KEY: ci-eval-key
+      APP_ENV: development
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Require OPENAI_API_KEY secret
+        env:
+          KEY_SET: ${{ secrets.OPENAI_API_KEY != '' }}
+        run: |
+          if [ "$KEY_SET" != "true" ]; then
+            echo "::error::OPENAI_API_KEY repo secret is not set — the evaluation job needs a real OpenAI key (evaluation/runner.py makes live embedding + LLM calls). Add it under Settings > Secrets > Actions, or trigger this workflow manually once it's configured."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
+
+      - name: Run database migrations
+        run: alembic upgrade head
+
+      - name: Run live evaluation
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python -m evaluation.runner --dataset evaluation/datasets/sample.json

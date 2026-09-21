@@ -31,3 +31,8 @@ dist/
 data/
 uploads/
 *.log
+
+# Evaluation run output — may contain generated answers over real questions;
+# not something to accumulate in git history. Commit a specific baseline
+# report deliberately (git add -f) if you want one preserved.
+evaluation/results/

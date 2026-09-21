@@ -56,13 +56,16 @@ retrieval_latency = Histogram(
 )
 rerank_latency = Histogram(
     "legalite_rerank_latency_seconds",
-    "Cohere reranker call duration. Zero observations when reranker disabled.",
+    "Cohere reranker call duration. Zero observations when reranker disabled "
+    "(NoOpReranker never calls record_rerank_latency).",
+    labelnames=("status",),  # success | failure
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5),
     registry=REGISTRY,
 )
 embedding_latency = Histogram(
     "legalite_embedding_latency_seconds",
-    "OpenAI embedding call duration (per batch).",
+    "OpenAI embedding call duration (per batch attempt).",
+    labelnames=("status",),  # success | failure
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
     registry=REGISTRY,
 )
@@ -131,7 +134,7 @@ tenant_isolation_score = Gauge(
 qdrant_failures = Counter(
     "legalite_qdrant_failures_total",
     "Exceptions raised by the Qdrant client.",
-    labelnames=("operation",),  # search | upsert | delete
+    labelnames=("operation",),  # search | upsert | delete | ensure_collection
     registry=REGISTRY,
 )
 postgres_failures = Counter(
@@ -236,6 +239,44 @@ def record_ocr_page(outcome: str) -> None:
     """Track per-page OCR outcome — one of: text_extracted, ocr_extracted,
     ocr_failed, ocr_disabled."""
     ocr_pages_total.labels(outcome=outcome).inc()
+
+
+def record_qdrant_failure(operation: str) -> None:
+    """One shared call site so every Qdrant operation reports the same way.
+
+    Before this, only ``search()`` incremented ``qdrant_failures`` — a
+    failing ``upsert``/``delete``/``ensure_collection`` raised with no
+    telemetry at all. Call this from an ``except`` block and re-raise;
+    it never swallows the exception itself.
+    """
+    qdrant_failures.labels(operation=operation).inc()
+
+
+def record_postgres_failure(operation: str) -> None:
+    """Mirror of :func:`record_qdrant_failure` for instrumented SQLAlchemy
+    calls on the RAG path. Call from an ``except`` block and re-raise."""
+    postgres_failures.labels(operation=operation).inc()
+
+
+def record_embedding_latency(seconds: float, *, success: bool) -> None:
+    embedding_latency.labels(status="success" if success else "failure").observe(seconds)
+
+
+def record_rerank_latency(seconds: float, *, success: bool) -> None:
+    rerank_latency.labels(status="success" if success else "failure").observe(seconds)
+
+
+def record_hallucination_floor_if_ungrounded(*, confidence: str, has_citations: bool) -> None:
+    """Same heuristic as ``evaluation.metrics.hallucination_rate``, applied
+    per live request instead of per eval case: an answer that wasn't
+    refused (confidence != "low") but produced zero citations is a case
+    we *know* is ungrounded — a floor, not a real hallucination detector.
+    A genuine hallucination (wrong claim backed by a real-looking but
+    incorrect citation) is invisible to this check by design; that needs
+    the golden-set comparison in the eval harness, not a production metric.
+    """
+    if confidence != "low" and not has_citations:
+        hallucination_floor.inc()
 
 
 def update_isolation_score(value: float) -> None:

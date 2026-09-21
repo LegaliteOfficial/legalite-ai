@@ -44,13 +44,37 @@ class ConfidenceEngine:
     def __init__(
         self,
         *,
-        min_retrieval_score: float | None = None,
+        catastrophic_cosine_threshold: float | None = None,
+        catastrophic_rerank_threshold: float | None = None,
+        confidence_high_threshold: float | None = None,
+        confidence_medium_threshold: float | None = None,
+        citation_consistency_high_threshold: float | None = None,
     ) -> None:
         settings = get_settings()
-        self._min_retrieval = (
-            min_retrieval_score
-            if min_retrieval_score is not None
-            else settings.rag_min_confidence_score
+        self._catastrophic_cosine = (
+            catastrophic_cosine_threshold
+            if catastrophic_cosine_threshold is not None
+            else settings.rag_catastrophic_cosine_threshold
+        )
+        self._catastrophic_rerank = (
+            catastrophic_rerank_threshold
+            if catastrophic_rerank_threshold is not None
+            else settings.rag_catastrophic_rerank_threshold
+        )
+        self._confidence_high = (
+            confidence_high_threshold
+            if confidence_high_threshold is not None
+            else settings.rag_confidence_high_threshold
+        )
+        self._confidence_medium = (
+            confidence_medium_threshold
+            if confidence_medium_threshold is not None
+            else settings.rag_confidence_medium_threshold
+        )
+        self._consistency_high = (
+            citation_consistency_high_threshold
+            if citation_consistency_high_threshold is not None
+            else settings.rag_citation_consistency_high_threshold
         )
 
     def assess_before_generation(
@@ -82,9 +106,9 @@ class ConfidenceEngine:
 
         # ``passages[0].score`` is the RRF-fused rank score (max ≈ 2/(k+1)
         # ≈ 0.033 for our k=60), which is NOT comparable to the cosine
-        # threshold in ``RAG_MIN_CONFIDENCE_SCORE``. Prefer the preserved
-        # pre-fusion cosine (``original_score``) when available — that's the
-        # signal we tuned thresholds against.
+        # threshold below. Prefer the preserved pre-fusion cosine
+        # (``original_score``) when available — that's the signal we tuned
+        # thresholds against.
         top_cosine = next(
             (p.original_score for p in passages if p.original_score is not None),
             None,
@@ -97,12 +121,10 @@ class ConfidenceEngine:
         # If we have rerank scores, trust them more. Otherwise rely on retrieval.
         primary = top_rerank if top_rerank is not None else top_retrieval
 
-        # Catastrophic-noise refusal. ``_min_retrieval`` is the
-        # configurable HIGH threshold (default 0.35); the catastrophic
-        # bar is fixed at 0.10 because below that we're below noise even
+        # Catastrophic-noise refusal — below this we're below noise even
         # on modern text-embedding-3-small.
-        if top_cosine is not None and top_cosine < 0.10 and (
-            top_rerank is None or top_rerank < 0.05
+        if top_cosine is not None and top_cosine < self._catastrophic_cosine and (
+            top_rerank is None or top_rerank < self._catastrophic_rerank
         ):
             return ConfidenceAssessment(
                 level="low",
@@ -115,16 +137,15 @@ class ConfidenceEngine:
                 ),
             )
 
-        # Three-tier confidence on the cosine scale. These thresholds
-        # match ``RAG_MIN_CONFIDENCE_SCORE`` semantics: HIGH = clearly on
+        # Three-tier confidence on the cosine scale: HIGH = clearly on
         # topic, MEDIUM = related but partial, LOW = weak but the LLM
         # still gets to try. LOW is NOT a refusal anymore — refusal only
         # happens on the catastrophic-noise branch above or in
         # assess_final when the LLM produced ungrounded text.
         level: Confidence
-        if primary >= 0.5:
+        if primary >= self._confidence_high:
             level = "high"
-        elif primary >= 0.3:
+        elif primary >= self._confidence_medium:
             level = "medium"
         else:
             level = "low"
@@ -179,9 +200,9 @@ class ConfidenceEngine:
             )
 
         level: Confidence
-        if final_score >= 0.5 and consistency >= 0.6:
+        if final_score >= self._confidence_high and consistency >= self._consistency_high:
             level = "high"
-        elif final_score >= 0.3:
+        elif final_score >= self._confidence_medium:
             level = "medium"
         else:
             level = "low"

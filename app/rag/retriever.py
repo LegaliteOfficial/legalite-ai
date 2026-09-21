@@ -38,11 +38,12 @@ class RetrievedPassage:
     # Rerank score (set by the Reranker; None if rerank disabled)
     rerank_score: float | None = None
     # The retriever-native score before Reciprocal Rank Fusion mutates
-    # ``score``. For vector hits this is the cosine similarity (0–1
-    # scale, comparable to ``RAG_MIN_CONFIDENCE_SCORE``). For keyword
-    # hits this is the Postgres FTS rank, which is on a different scale
-    # — so callers should only treat ``original_score`` as a confidence
-    # signal when the passage's pre-fusion ``source`` was ``"vector"``.
+    # ``score``. For vector hits this is the cosine similarity (0-1 scale,
+    # comparable to ConfidenceEngine's cosine thresholds in
+    # app/core/config.py). For keyword hits this is the Postgres FTS rank,
+    # which is on a different scale — so callers should only treat
+    # ``original_score`` as a confidence signal when the passage's
+    # pre-fusion ``source`` was ``"vector"``.
     original_score: float | None = None
     # Tenancy provenance — preserved across RRF so the structured /ask
     # response can group passages by source_scope (public vs private).

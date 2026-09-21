@@ -25,6 +25,7 @@ from app.core.logging import get_logger
 from app.core.telemetry import (
     observe,
     record_ask,
+    record_hallucination_floor_if_ungrounded,
     record_refusal,
     record_tenant_request,
     retrieval_latency,
@@ -401,6 +402,9 @@ class QAService:
             [] if result.refused else format_citations(result.used_passages)
         )
         sources = [] if result.refused else format_sources(result.used_passages)
+        record_hallucination_floor_if_ungrounded(
+            confidence=result.confidence, has_citations=bool(citations)
+        )
 
         msg_id = self._memory.append_assistant(
             sid,

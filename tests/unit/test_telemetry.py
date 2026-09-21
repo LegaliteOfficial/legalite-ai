@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from app.core.telemetry import (
-    REGISTRY,
+    hallucination_floor,
     observe,
+    postgres_failures,
     record_ask,
     record_citation_resolution,
+    record_embedding_latency,
+    record_hallucination_floor_if_ungrounded,
+    record_postgres_failure,
+    record_qdrant_failure,
     record_refusal,
+    record_rerank_latency,
     record_upload,
     render_metrics,
     retrieval_latency,
@@ -32,9 +38,60 @@ def test_render_metrics_contains_known_families() -> None:
         "legalite_uploads_total",
         "legalite_tenant_isolation_score",
         "legalite_citation_resolution_total",
+        # Previously dead (zero call sites) — Phase 1 wired these up.
+        # Listed explicitly so a future regression that stops calling
+        # record_embedding_latency/record_rerank_latency/etc. still shows
+        # the family (histograms/counters render even at zero
+        # observations), but the increment tests below would catch an
+        # actual call-site removal.
+        "legalite_embedding_latency_seconds",
+        "legalite_rerank_latency_seconds",
+        "legalite_postgres_failures_total",
+        "legalite_hallucination_floor_total",
     )
     for fam in expected_families:
         assert fam in body_str, f"missing metric family {fam}"
+
+
+def test_record_embedding_latency_increments_by_status() -> None:
+    record_embedding_latency(0.1, success=True)
+    record_embedding_latency(0.2, success=False)
+    body = render_metrics()[0].decode("utf-8")
+    assert 'legalite_embedding_latency_seconds_count{status="success"}' in body
+    assert 'legalite_embedding_latency_seconds_count{status="failure"}' in body
+
+
+def test_record_rerank_latency_increments_by_status() -> None:
+    record_rerank_latency(0.05, success=True)
+    body = render_metrics()[0].decode("utf-8")
+    assert 'legalite_rerank_latency_seconds_count{status="success"}' in body
+
+
+def test_record_qdrant_and_postgres_failures() -> None:
+    record_qdrant_failure("upsert")
+    record_qdrant_failure("ensure_collection")
+    record_postgres_failure("keyword_search")
+    body = render_metrics()[0].decode("utf-8")
+    assert 'legalite_qdrant_failures_total{operation="upsert"}' in body
+    assert 'legalite_qdrant_failures_total{operation="ensure_collection"}' in body
+    assert 'legalite_postgres_failures_total{operation="keyword_search"}' in body
+
+
+def test_hallucination_floor_only_fires_when_ungrounded() -> None:
+    before = postgres_failures.labels(operation="keyword_search")._value.get()  # type: ignore[attr-defined]
+    hallucination_before = hallucination_floor._value.get()  # type: ignore[attr-defined]
+
+    # Grounded (has citations) — must NOT increment regardless of confidence.
+    record_hallucination_floor_if_ungrounded(confidence="high", has_citations=True)
+    # Refused/low-confidence with no citations — expected shape, not a hallucination.
+    record_hallucination_floor_if_ungrounded(confidence="low", has_citations=False)
+    assert hallucination_floor._value.get() == hallucination_before  # type: ignore[attr-defined]
+
+    # Confident answer with zero citations — exactly the ungrounded case this floor exists to catch.
+    record_hallucination_floor_if_ungrounded(confidence="high", has_citations=False)
+    assert hallucination_floor._value.get() == hallucination_before + 1  # type: ignore[attr-defined]
+    # Unrelated counter must be untouched by the above.
+    assert postgres_failures.labels(operation="keyword_search")._value.get() == before  # type: ignore[attr-defined]
 
 
 def test_record_ask_and_refusal_increment_counters() -> None:
