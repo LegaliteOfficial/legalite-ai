@@ -16,7 +16,7 @@ from qdrant_client.http import models as qm
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.telemetry import qdrant_failures
+from app.core.telemetry import record_qdrant_failure
 
 logger = get_logger(__name__)
 
@@ -110,13 +110,17 @@ class QdrantVectorStore:
         the fix, every tenant-aware retrieval in production would have
         failed once a real Qdrant filter was applied.
         """
-        existing = {c.name for c in self._client.get_collections().collections}
-        if self._collection not in existing:
-            logger.info("qdrant.creating_collection", name=self._collection, dim=self._dim)
-            self._client.create_collection(
-                collection_name=self._collection,
-                vectors_config=qm.VectorParams(size=self._dim, distance=qm.Distance.COSINE),
-            )
+        try:
+            existing = {c.name for c in self._client.get_collections().collections}
+            if self._collection not in existing:
+                logger.info("qdrant.creating_collection", name=self._collection, dim=self._dim)
+                self._client.create_collection(
+                    collection_name=self._collection,
+                    vectors_config=qm.VectorParams(size=self._dim, distance=qm.Distance.COSINE),
+                )
+        except Exception:
+            record_qdrant_failure("ensure_collection")
+            raise
 
         # Always (re)assert the payload indexes — cheap when they exist.
         # These four fields are referenced by every retrieval filter in the
@@ -163,29 +167,37 @@ class QdrantVectorStore:
             qm.PointStruct(id=pid, vector=vec, payload=pl.as_dict())
             for pid, vec, pl in zip(point_ids, embeddings, payloads, strict=True)
         ]
-        for start in range(0, len(points), self._UPSERT_BATCH_SIZE):
-            batch = points[start : start + self._UPSERT_BATCH_SIZE]
-            self._client.upsert(
-                collection_name=self._collection,
-                points=batch,
-                wait=True,
-            )
+        try:
+            for start in range(0, len(points), self._UPSERT_BATCH_SIZE):
+                batch = points[start : start + self._UPSERT_BATCH_SIZE]
+                self._client.upsert(
+                    collection_name=self._collection,
+                    points=batch,
+                    wait=True,
+                )
+        except Exception:
+            record_qdrant_failure("upsert")
+            raise
         return point_ids
 
     def delete_by_document(self, document_id: str) -> None:
-        self._client.delete(
-            collection_name=self._collection,
-            points_selector=qm.FilterSelector(
-                filter=qm.Filter(
-                    must=[
-                        qm.FieldCondition(
-                            key="document_id",
-                            match=qm.MatchValue(value=document_id),
-                        )
-                    ]
-                )
-            ),
-        )
+        try:
+            self._client.delete(
+                collection_name=self._collection,
+                points_selector=qm.FilterSelector(
+                    filter=qm.Filter(
+                        must=[
+                            qm.FieldCondition(
+                                key="document_id",
+                                match=qm.MatchValue(value=document_id),
+                            )
+                        ]
+                    )
+                ),
+            )
+        except Exception:
+            record_qdrant_failure("delete")
+            raise
 
     # ---- reads -------------------------------------------------------------
 
@@ -212,7 +224,7 @@ class QdrantVectorStore:
                 query_filter=query_filter,
             )
         except Exception:
-            qdrant_failures.labels(operation="search").inc()
+            record_qdrant_failure("search")
             raise
         return [
             VectorHit(

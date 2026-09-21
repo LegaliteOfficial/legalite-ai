@@ -137,10 +137,18 @@ class IngestionService:
             store = self._vector_store or get_vector_store()
             origin_str = document_origin.value if document_origin else None
             org_str = str(org_id) if org_id else None
+            # Bug fix (Phase 2.5): generate each chunk's id up front and use
+            # the SAME value for both the Qdrant payload and the eventual
+            # Postgres row (see ChunkRecord.id) — previously VectorPayload.chunk_id
+            # was a throwaway uuid4() unrelated to the row Postgres would
+            # later create, so every citation's chunk_id was unresolvable
+            # against legal_chunks (caught by
+            # tests/integration/test_synthetic_corpus_e2e.py).
+            chunk_ids = [uuid.uuid4() for _ in chunks]
             payloads = [
                 VectorPayload(
                     document_id=str(document_id),
-                    chunk_id=str(uuid.uuid4()),
+                    chunk_id=str(chunk_ids[i]),
                     law=title,
                     doc_type=doc_type,
                     title=c.title,
@@ -164,12 +172,13 @@ class IngestionService:
                     start_char=c.start_char,
                     end_char=c.end_char,
                 )
-                for c in chunks
+                for i, c in enumerate(chunks)
             ]
             point_ids = store.upsert(embeddings, payloads)
 
             records = [
                 ChunkRecord(
+                    id=chunk_ids[i],
                     content=c.content,
                     title=c.title,
                     chapter=c.chapter,
@@ -191,10 +200,22 @@ class IngestionService:
                     start_char=c.start_char,
                     end_char=c.end_char,
                 )
-                for c, pid in zip(chunks, point_ids, strict=True)
+                for i, (c, pid) in enumerate(zip(chunks, point_ids, strict=True))
             ]
             self._repo.add_chunks(document_id, records)
             document.page_count = parsed.page_count
+            # Bug fix (Phase 1I): create_document() runs before parsing/
+            # chunking, so law_type/act_number/effective_year weren't known
+            # yet and were never passed to it — legal_documents.law_type
+            # etc. were always NULL even though the identical values were
+            # correctly computed and stored per-chunk on legal_chunks.
+            # chunks[0] is safe here: the "not chunks" branch above already
+            # returned early, so this line only runs with >=1 chunk, and
+            # doc-level metadata is broadcast identically to every chunk
+            # (see LegalChunker._detect_doc_metadata + _attach_doc_meta).
+            document.law_type = chunks[0].law_type
+            document.act_number = chunks[0].act_number
+            document.effective_year = chunks[0].effective_year
 
             # Upload the original PDF to Supabase Storage AFTER chunks
             # land in Postgres. Order matters: if the storage upload

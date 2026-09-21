@@ -189,8 +189,8 @@ class LegalChunker:
         chunk_overlap: int | None = None,
     ) -> None:
         settings = get_settings()
-        self._max_chunk_chars = max_chunk_chars or settings.rag_chunk_size * 4
-        self._overlap_chars = chunk_overlap or settings.rag_chunk_overlap * 4
+        self._max_chunk_chars = max_chunk_chars or settings.rag_max_chunk_chars
+        self._overlap_chars = chunk_overlap or settings.rag_chunk_overlap_chars
 
     def chunk(self, parsed: ParsedPdf, doc_title: str | None = None) -> list[LegalChunk]:
         doc_meta = _detect_doc_metadata(parsed, doc_title)
@@ -339,8 +339,81 @@ def _apply_marker(cursor: _Cursor, level_value: tuple[str, str], line: str) -> N
         cursor.subsection = value
 
 
+_SENTENCE_END_RE = re.compile(r"[.!?][\"'\)\]]?(?=\s|\n|$)")
+# How far back from a hard character cutoff to search for a natural break
+# (sentence end, then line break, then any whitespace) before giving up
+# and accepting the hard cutoff. A fraction of max_chars rather than a
+# fixed constant so it scales sensibly whether max_chars is 500 or 50000.
+_BREAK_SEARCH_FRACTION = 0.2
+
+
+def _find_break_point(text: str, hard_end: int, *, min_end: int) -> int:
+    """Find the best place at or before ``hard_end`` to end a slice.
+
+    Searches backward within a window for, in priority order: a sentence
+    ending, a line break, any whitespace. Never returns a value <= the
+    slice's start (``min_end``) — callers must fall back to ``hard_end``
+    in that case to guarantee forward progress on text with no usable
+    break in range (e.g. one very long unbroken token).
+    """
+    if hard_end >= len(text):
+        return len(text)
+
+    lookback = max(1, int((hard_end - min_end) * _BREAK_SEARCH_FRACTION))
+    window_start = max(min_end, hard_end - lookback)
+    window = text[window_start:hard_end]
+
+    last_sentence_end = None
+    for m in _SENTENCE_END_RE.finditer(window):
+        last_sentence_end = m.end()
+    if last_sentence_end is not None:
+        return window_start + last_sentence_end
+
+    last_newline = window.rfind("\n")
+    if last_newline != -1:
+        return window_start + last_newline + 1
+
+    last_space = window.rfind(" ")
+    if last_space != -1:
+        return window_start + last_space + 1
+
+    return hard_end
+
+
+def _snap_forward_past_partial_word(text: str, pos: int, *, limit: int) -> int:
+    """If ``pos`` lands inside a word, advance to the start of the next
+    whole word (skip to the end of the current whitespace run following
+    it). Choosing a clean END boundary for one slice is not enough — the
+    NEXT slice's start is ``end - overlap``, an arithmetic offset with no
+    guarantee it lands on a boundary too. Without this, the overlap
+    region can begin mid-word (e.g. a slice starting with a stray "s"
+    left over from "This").
+
+    Returns ``limit`` unchanged if no whitespace exists before it (e.g.
+    the overlap window sits entirely inside one long unbroken token) —
+    the caller then skips overlap for that split rather than risk a
+    fragment.
+    """
+    if pos <= 0 or pos >= limit or text[pos - 1].isspace():
+        return pos  # already at (or past) a clean boundary
+    i = pos
+    while i < limit and not text[i].isspace():
+        i += 1
+    while i < limit and text[i].isspace():
+        i += 1
+    return i
+
+
 def _split_oversized(chunk: LegalChunk, max_chars: int, overlap: int) -> list[LegalChunk]:
-    """If a single hierarchy unit is huge, split with overlap to preserve context."""
+    """If a single hierarchy unit is huge, split with overlap to preserve context.
+
+    Prefers a sentence or whitespace boundary near the character limit over
+    a hard cut, so this never slices a word in half when a reasonable break
+    point exists nearby. Falls back to a hard cut only when no break is
+    found within the search window (e.g. a single run of text with no
+    spaces at all) — that guarantees the loop always makes forward
+    progress and terminates.
+    """
     text = chunk.content
     if len(text) <= max_chars:
         return [chunk]
@@ -348,7 +421,10 @@ def _split_oversized(chunk: LegalChunk, max_chars: int, overlap: int) -> list[Le
     parts: list[LegalChunk] = []
     start = 0
     while start < len(text):
-        end = min(start + max_chars, len(text))
+        hard_end = min(start + max_chars, len(text))
+        end = _find_break_point(text, hard_end, min_end=start)
+        if end <= start:
+            end = hard_end
         parts.append(
             LegalChunk(
                 content=text[start:end].strip(),
@@ -365,5 +441,8 @@ def _split_oversized(chunk: LegalChunk, max_chars: int, overlap: int) -> list[Le
         )
         if end == len(text):
             break
-        start = end - overlap if overlap < max_chars else end
+        next_start = end - overlap
+        if next_start > start:
+            next_start = _snap_forward_past_partial_word(text, next_start, limit=end)
+        start = next_start if next_start > start else end
     return parts

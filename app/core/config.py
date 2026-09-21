@@ -40,9 +40,32 @@ class Settings(BaseSettings):
 
     # --- RAG tuning --------------------------------------------------------
     rag_top_k: int = 6
-    rag_chunk_size: int = 900
-    rag_chunk_overlap: int = 120
-    rag_min_confidence_score: float = 0.35
+
+    # Character limits for LegalChunker's oversized-unit fallback split
+    # (app/ingestion/legal_chunker.py). Structure-aware chunking (splitting
+    # on detected article/section/clause markers) does NOT use these at
+    # all — they only bound a single hierarchy unit that's too large to
+    # keep whole. Previously named RAG_CHUNK_SIZE=900 / RAG_CHUNK_OVERLAP=120
+    # and silently multiplied by 4 inside LegalChunker.__init__ (an
+    # undocumented token->char heuristic) to get these same effective
+    # values (900*4=3600, 120*4=480) — renamed so the number you set here
+    # is the number actually enforced, no hidden multiplier.
+    rag_max_chunk_chars: int = 3600
+    rag_chunk_overlap_chars: int = 480
+
+    # Confidence / refusal thresholds — previously a single
+    # RAG_MIN_CONFIDENCE_SCORE that was read into ConfidenceEngine and then
+    # never actually used; the real gates were hardcoded literals scattered
+    # through app/rag/confidence_engine.py. These five names are exactly
+    # those literals, given names and defaults equal to the values already
+    # live in production — this is a wiring fix, not a threshold change.
+    # Do not retune these without the golden-set evaluation harness
+    # (evaluation/runner.py) to measure the effect first.
+    rag_catastrophic_cosine_threshold: float = 0.10
+    rag_catastrophic_rerank_threshold: float = 0.05
+    rag_confidence_high_threshold: float = 0.5
+    rag_confidence_medium_threshold: float = 0.3
+    rag_citation_consistency_high_threshold: float = 0.6
 
     # Hybrid retrieval + rerank
     hybrid_topk_vector: int = 20

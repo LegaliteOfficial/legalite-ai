@@ -40,6 +40,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except Exception:  # noqa: BLE001
         logger.exception("startup.qdrant_unavailable")
 
+    # One-time, unmissable log of whether reranking is actually active.
+    # build_reranker() already warns on every /ask request when
+    # COHERE_API_KEY is missing (app/rag/reranker.py) — that's easy to miss
+    # in request-volume logs, so this makes the same fact visible exactly
+    # once at boot instead.
+    from app.rag.reranker import CohereReranker, build_reranker
+
+    reranker = build_reranker()
+    logger.info(
+        "startup.reranker_status",
+        configured_provider=settings.rerank_provider,
+        active_implementation=type(reranker).__name__,
+        enabled=isinstance(reranker, CohereReranker),
+    )
+
     logger.info(
         "app.starting",
         env=settings.app_env,

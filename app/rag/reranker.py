@@ -17,10 +17,12 @@ upstream `confidence_engine` will see a missing `rerank_score` and adjust.
 
 from __future__ import annotations
 
+import time
 from abc import ABC, abstractmethod
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.telemetry import record_rerank_latency
 from app.rag.retriever import RetrievedPassage
 
 logger = get_logger(__name__)
@@ -61,6 +63,7 @@ class CohereReranker(BaseReranker):
         if not passages:
             return []
         documents = [p.content for p in passages]
+        start = time.perf_counter()
         try:
             response = self._client.rerank(
                 model=self._model,
@@ -71,8 +74,10 @@ class CohereReranker(BaseReranker):
                 request_options={"timeout_in_seconds": self._timeout},
             )
         except Exception:
+            record_rerank_latency(time.perf_counter() - start, success=False)
             logger.exception("rerank.cohere_failed", model=self._model, candidates=len(passages))
             return passages[:top_n]
+        record_rerank_latency(time.perf_counter() - start, success=True)
 
         out: list[RetrievedPassage] = []
         for r in response.results:
