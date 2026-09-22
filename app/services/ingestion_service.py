@@ -299,44 +299,57 @@ class IngestionService:
             citations = []
 
         try:
-            case = self._case_repo.create_case(
-                CaseRecord(
-                    document_id=document_id,
-                    case_title=meta.case_title,
-                    case_number=meta.case_number,
-                    court=meta.court,
-                    judges=meta.judges or None,
-                    decision_date=meta.decision_date,
-                    outcome=meta.outcome,
-                    holding=meta.holding,
-                    facts_summary=meta.facts_summary,
-                    legal_topics=meta.legal_topics or None,
-                    organization_id=organization_id,
-                    visibility_scope=visibility_scope.value,
-                    parties=[
-                        CasePartyRecord(role=p.role, party_name=p.party_name)
-                        for p in meta.parties
-                    ],
-                    citations=[
-                        CaseCitationRecord(
-                            cited_raw_text=c.raw_text,
-                            cited_case_title=c.case_title,
-                            cited_reporter=c.reporter,
-                        )
-                        for c in citations
-                    ],
+            # A SAVEPOINT, not the outer transaction — ``ingest_pdf``'s
+            # document + chunk rows are already flushed but not yet
+            # committed at this point. Without this, a DB-level failure
+            # here (e.g. a too-long case_number) leaves the whole session
+            # in Postgres's aborted-transaction state, and the NEXT
+            # statement anywhere in ``ingest_pdf`` (mark_document_status)
+            # raises a confusing PendingRollbackError that masks the real
+            # cause and fails the entire job — even though the chunks and
+            # embeddings, which this docstring says must survive, were
+            # already fine. Caught in production: an unnormalized
+            # case_number blew the 128-char column and took the whole
+            # ingestion down with it.
+            with self._db.begin_nested():
+                case = self._case_repo.create_case(
+                    CaseRecord(
+                        document_id=document_id,
+                        case_title=meta.case_title,
+                        case_number=meta.case_number,
+                        court=meta.court,
+                        judges=meta.judges or None,
+                        decision_date=meta.decision_date,
+                        outcome=meta.outcome,
+                        holding=meta.holding,
+                        facts_summary=meta.facts_summary,
+                        legal_topics=meta.legal_topics or None,
+                        organization_id=organization_id,
+                        visibility_scope=visibility_scope.value,
+                        parties=[
+                            CasePartyRecord(role=p.role, party_name=p.party_name)
+                            for p in meta.parties
+                        ],
+                        citations=[
+                            CaseCitationRecord(
+                                cited_raw_text=c.raw_text,
+                                cited_case_title=c.case_title,
+                                cited_reporter=c.reporter,
+                            )
+                            for c in citations
+                        ],
+                    )
                 )
-            )
-            # Phase 5 M5 — try to resolve outgoing citation edges against
-            # whatever cases are already in the corpus. Best-effort; failure
-            # never breaks ingestion.
-            try:
-                resolver = CitationResolutionService(self._db)
-                resolver.resolve_for_case(case.id)
-            except Exception:
-                logger.exception(
-                    "citation.resolution.failed", document_id=str(document_id)
-                )
+                # Phase 5 M5 — try to resolve outgoing citation edges against
+                # whatever cases are already in the corpus. Best-effort;
+                # failure never breaks ingestion.
+                try:
+                    resolver = CitationResolutionService(self._db)
+                    resolver.resolve_for_case(case.id)
+                except Exception:
+                    logger.exception(
+                        "citation.resolution.failed", document_id=str(document_id)
+                    )
             logger.info(
                 "case.persisted",
                 document_id=str(document_id),
