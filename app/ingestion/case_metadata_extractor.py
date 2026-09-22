@@ -213,10 +213,10 @@ class CaseMetadataExtractor:
     def _extract_case_number(text: str) -> str | None:
         m = _CASE_NUMBER_RE.search(text)
         if m:
-            return m.group(0).strip()
+            return _clean_case_number(m.group(0))
         m = _REPORTER_CITATION_RE.search(text)
         if m:
-            return m.group(0).strip()
+            return _clean_case_number(m.group(0))
         return None
 
     @staticmethod
@@ -422,6 +422,18 @@ def _clean_party(raw: str) -> str:
     # Drop leading noise like "BETWEEN:" or "PLAINTIFFS:".
     s = re.sub(r"^(BETWEEN|PLAINTIFFS?|DEFENDANTS?|APPELLANTS?|RESPONDENTS?)[:\s]+", "", s, flags=re.IGNORECASE)
     return s.strip(" .,;:'\"")[:256]
+
+
+def _clean_case_number(raw: str) -> str:
+    # ``_CASE_NUMBER_RE``'s "\s+"/"\s*" between the label ("Criminal Appeal")
+    # and "No." can span a huge run of whitespace when a PDF's text
+    # extraction preserves a right-aligned page header's horizontal gap —
+    # collapse it the same way ``_clean_name``/``_clean_party`` already do,
+    # then truncate defensively so a still-unusual match can never exceed
+    # ``legal_cases.case_number``'s ``String(128)`` column (caught in
+    # production: an uncollapsed match produced a >128-char string with a
+    # newline and ~100 embedded spaces, which failed the insert).
+    return re.sub(r"\s+", " ", raw).strip()[:128]
 
 
 def _truncate(text: str, *, max_chars: int) -> str:

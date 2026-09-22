@@ -121,3 +121,26 @@ def test_reporter_citation_acts_as_case_number_fallback() -> None:
     meta = _extractor().extract(_parsed([text]))
     # No "Suit No." present, so the reporter form should be picked up.
     assert meta.case_number is not None and "GHASC" in meta.case_number.upper()
+
+
+def test_case_number_collapses_pdf_layout_whitespace_and_fits_the_column() -> None:
+    """Regression test — production bug.
+
+    A right-aligned page header ("CRIMINAL APPEAL" ... wide gap ... "NO.
+    J3/1/2020") extracts with PyMuPDF as a huge run of literal whitespace
+    between the label and "No.", because ``_CASE_NUMBER_RE``'s "\\s+"/"\\s*"
+    is unbounded. Uncollapsed, this produced a >128-char case_number that
+    failed the ``legal_cases.case_number`` VARCHAR(128) insert and took the
+    whole ingestion job down with it (see ingestion_service.py's savepoint
+    fix for the second half of that incident).
+    """
+    text = (
+        "IN THE SUPREME COURT OF GHANA\n"
+        "CRIMINAL APPEAL" + " " * 100 + "\n" + " " * 20 + "NO. J3/1/2020\n"
+        "BETWEEN: REPUBLIC v SULEMANA\n"
+    )
+    meta = _extractor().extract(_parsed([text]))
+    assert meta.case_number == "CRIMINAL APPEAL NO. J3/1/2020"
+    assert len(meta.case_number) <= 128
+    assert "  " not in meta.case_number
+    assert "\n" not in meta.case_number
