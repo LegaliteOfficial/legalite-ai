@@ -36,6 +36,7 @@ from app.db.enums import ConfidentialityLevel, VisibilityScope
 from app.db.repositories.document_repository import DocumentRepository
 from app.db.repositories.job_repository import JobRepository
 from app.db.session import get_db
+from app.ingestion.document_classifier import AUTO_DOC_TYPE
 from app.schemas.documents import UploadLawResponse
 from app.schemas.jobs import (
     BulkUploadJobResult,
@@ -128,11 +129,12 @@ async def upload_law_bulk(
             "extension."
         ),
     ),
-    doc_type: str = Form(
-        ...,
+    doc_type: str | None = Form(
+        default=None,
         description=(
-            "Doc type applied to every file in the batch. Mix doc types "
-            "across separate calls — one batch, one doc type."
+            "Optional doc type applied to every file in the batch. Omit "
+            "it to have each file classified from its content (Constitution, "
+            "Act, Regulation, Case Law, ...) during ingestion."
         ),
     ),
     db: Session = Depends(get_db),
@@ -177,12 +179,9 @@ async def upload_law_bulk(
             ),
         )
 
-    doc_type_clean = doc_type.strip()
-    if len(doc_type_clean) < 1:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="doc_type is required.",
-        )
+    # Blank counts as omitted: the worker classifies each file instead.
+    doc_type_clean = (doc_type or "").strip() or AUTO_DOC_TYPE
+    auto_classify = doc_type_clean == AUTO_DOC_TYPE
 
     accepted: list[BulkUploadJobResult] = []
     rejected: list[BulkUploadRejection] = []
@@ -214,9 +213,12 @@ async def upload_law_bulk(
     candidate_titles = [t for _, t, _ in prepared]
     doc_repo = DocumentRepository(db)
     job_repo = JobRepository(db)
-    existing_docs = doc_repo.find_global_by_titles(candidate_titles, doc_type_clean)
+    # An auto-classified file's type is unknown until the worker reads
+    # it, so its duplicates are matched on title alone.
+    dedup_doc_type = None if auto_classify else doc_type_clean
+    existing_docs = doc_repo.find_global_by_titles(candidate_titles, dedup_doc_type)
     in_flight_jobs = job_repo.find_in_flight_global_by_titles(
-        candidate_titles, doc_type_clean
+        candidate_titles, dedup_doc_type
     )
 
     # Stage 3 — enqueue or skip. ``seen_in_batch`` catches the case

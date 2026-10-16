@@ -86,6 +86,8 @@ class Settings(BaseSettings):
 
     # Case-law intelligence
     case_llm_enrichment_enabled: bool | None = None  # None = auto-detect (off in tests)
+    # Upload-time doc_type classification (bulk uploads without a doc_type)
+    doc_classifier_llm_enabled: bool | None = None  # None = auto-detect (off in tests)
     case_similarity_top_k: int = 8
     case_similarity_topic_weight: float = 0.35
     case_similarity_semantic_weight: float = 0.65

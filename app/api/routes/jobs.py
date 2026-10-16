@@ -36,6 +36,8 @@ from sqlalchemy.orm import Session
 from app.api.dependencies.tenant import get_optional_tenant_context
 from app.core.tenant_context import TenantContext
 from app.db.enums import GLOBAL_INGEST_ROLES
+from app.db.models.ingestion_job import IngestionJob
+from app.db.models.legal_document import LegalDocument
 from app.db.repositories.job_repository import JobRepository
 from app.db.session import get_db
 from app.schemas.jobs import BulkJobStatusResponse, JobStatusResponse
@@ -119,10 +121,7 @@ async def get_jobs_bulk(
             # same response so cross-tenant probing reveals nothing.
             missing.append(job_id)
             continue
-        payload = JobStatusResponse.model_validate(job, from_attributes=True)
-        if job.document_id:
-            payload.chunk_count = repo.count_chunks(job.document_id)
-        found.append(payload)
+        found.append(_status_payload(db, repo, job))
 
     return BulkJobStatusResponse(found=found, missing=missing)
 
@@ -139,9 +138,25 @@ async def get_job(
         # Same 404 in both cases so callers can't probe existence
         # across tenant boundaries.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    return _status_payload(db, repo, job)
+
+
+def _status_payload(
+    db: Session, repo: JobRepository, job: IngestionJob
+) -> JobStatusResponse:
+    """Job row → response, plus what ingestion learned about the document.
+
+    For auto-classified uploads the job row keeps the ``auto`` sentinel;
+    the detected ``doc_type`` and ``summary`` live on the document.
+    """
     payload = JobStatusResponse.model_validate(job, from_attributes=True)
     if job.document_id:
         payload.chunk_count = repo.count_chunks(job.document_id)
+        document = db.get(LegalDocument, job.document_id)
+        if document is not None and document.doc_type_source is not None:
+            payload.doc_type = document.doc_type
+            payload.summary = document.summary
+            payload.doc_type_source = document.doc_type_source
     return payload
 
 

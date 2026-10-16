@@ -99,7 +99,7 @@ class DocumentRepository:
         return doc
 
     def find_global_by_titles(
-        self, titles: Iterable[str], doc_type: str
+        self, titles: Iterable[str], doc_type: str | None
     ) -> dict[str, LegalDocument]:
         """Batch lookup for bulk-upload idempotency.
 
@@ -110,19 +110,24 @@ class DocumentRepository:
         One SQL query regardless of batch size, which matters because
         ``POST /upload-law/bulk`` is the only caller and the alternative
         is N queries per request.
+
+        ``doc_type=None`` matches on title alone — used for auto-classified
+        uploads, whose type isn't known until the worker has read the PDF.
         """
         title_list = [t for t in titles if t]
         if not title_list:
             return {}
-        rows = self._db.execute(
+        query = (
             select(LegalDocument)
             .where(LegalDocument.title.in_(title_list))
-            .where(LegalDocument.doc_type == doc_type)
             .where(
                 LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value
             )
             .where(LegalDocument.status == "ingested")
-        ).scalars()
+        )
+        if doc_type is not None:
+            query = query.where(LegalDocument.doc_type == doc_type)
+        rows = self._db.execute(query).scalars()
         # If the same title exists twice (it shouldn't but might in
         # legacy data), the later row wins. Both rows are equally
         # valid skip targets so this is fine.

@@ -34,7 +34,13 @@ class JobStatusResponse(BaseModel):
     visibility_scope: str
     document_origin: str | None = None
     title: str
+    # ``auto`` while an auto-classified upload is still queued/processing;
+    # the detected type once the document exists.
     doc_type: str
+    # Only for auto-classified uploads: a one-to-two sentence description
+    # (LLM path), and whether the type came from the LLM or the rules.
+    summary: str | None = None
+    doc_type_source: Literal["llm", "heuristic"] | None = None
     source_filename: str
     organization_id: uuid.UUID | None = None
     user_id: uuid.UUID | None = None

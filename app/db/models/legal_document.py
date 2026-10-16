@@ -42,6 +42,10 @@ class LegalDocument(Base, TimestampMixin):
     # ingested | failed | processing
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="processing")
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Set when doc_type was detected from content rather than supplied by
+    # the uploader (migration 0010). ``doc_type_source`` is llm | heuristic.
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    doc_type_source: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     # Tenancy + classification (migration 0004)
     organization_id: Mapped[uuid.UUID | None] = mapped_column(

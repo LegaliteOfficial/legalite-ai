@@ -36,6 +36,7 @@ from app.db.repositories.case_repository import (
 from app.db.repositories.document_repository import ChunkRecord, DocumentRepository
 from app.ingestion.case_metadata_extractor import CaseMetadataExtractor
 from app.ingestion.citation_extractor import CitationExtractor
+from app.ingestion.document_classifier import AUTO_DOC_TYPE, DocumentClassifier
 from app.ingestion.embedding_service import EmbeddingService
 from app.ingestion.legal_chunker import LegalChunker
 from app.ingestion.pdf_parser import ParsedPdf, PdfParser
@@ -57,6 +58,7 @@ class IngestionService:
         vector_store: QdrantVectorStore | None = None,
         case_extractor: CaseMetadataExtractor | None = None,
         citation_extractor: CitationExtractor | None = None,
+        classifier: DocumentClassifier | None = None,
         storage: StorageService | None = None,
     ) -> None:
         self._db = db
@@ -68,6 +70,7 @@ class IngestionService:
         self._vector_store = vector_store  # injected lazily to avoid import-time qdrant connect
         self._case_extractor = case_extractor or CaseMetadataExtractor()
         self._citation_extractor = citation_extractor or CitationExtractor()
+        self._classifier = classifier
         # Optional: when Supabase Storage env is unset, this constructs
         # in disabled mode and every upload silently no-ops. See
         # StorageService.upload for the graceful-degradation contract.
@@ -91,6 +94,10 @@ class IngestionService:
         GLOBAL upload (Constitution, Acts, ...) or a TENANT_PRIVATE upload
         (sample case, internal memo, ...). The two paths share this code so
         the chunking / embedding pipeline can never drift between them.
+
+        ``doc_type == AUTO_DOC_TYPE`` means the uploader didn't pick one:
+        it is classified from the parsed text before chunking, so the
+        detected type is what lands on the document, chunks and vectors.
 
         Returns (document_id, chunks_indexed).
         """
@@ -122,6 +129,20 @@ class IngestionService:
 
         try:
             parsed = self._parser.parse(storage_path)
+            if doc_type == AUTO_DOC_TYPE:
+                classification = (self._classifier or DocumentClassifier()).classify(
+                    parsed, title
+                )
+                doc_type = classification.doc_type
+                document.doc_type = classification.doc_type
+                document.summary = classification.summary
+                document.doc_type_source = classification.source
+                logger.info(
+                    "ingestion.classified",
+                    document_id=str(document_id),
+                    doc_type=doc_type,
+                    source=classification.source,
+                )
             chunks = self._chunker.chunk(parsed, doc_title=title)
             if not chunks:
                 self._repo.mark_document_status(

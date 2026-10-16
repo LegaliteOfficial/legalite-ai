@@ -56,7 +56,7 @@ class JobRepository:
         return self._db.get(IngestionJob, job_id)
 
     def find_in_flight_global_by_titles(
-        self, titles: list[str], doc_type: str
+        self, titles: list[str], doc_type: str | None
     ) -> dict[str, IngestionJob]:
         """Batch lookup for bulk-upload idempotency.
 
@@ -67,19 +67,22 @@ class JobRepository:
         caught by the document lookup instead.
 
         One SQL query regardless of batch size; same rationale as
-        :meth:`DocumentRepository.find_global_by_titles`.
+        :meth:`DocumentRepository.find_global_by_titles`, including
+        ``doc_type=None`` meaning "any type".
         """
         if not titles:
             return {}
-        rows = self._db.execute(
+        query = (
             select(IngestionJob)
             .where(IngestionJob.title.in_(titles))
-            .where(IngestionJob.doc_type == doc_type)
             .where(
                 IngestionJob.visibility_scope == VisibilityScope.GLOBAL.value
             )
             .where(IngestionJob.status.in_(("queued", "processing")))
-        ).scalars()
+        )
+        if doc_type is not None:
+            query = query.where(IngestionJob.doc_type == doc_type)
+        rows = self._db.execute(query).scalars()
         # On the rare case the same title has two in-flight jobs (a
         # client retried during a network blip and both made it), the
         # later one wins. Either reference is a valid skip target.

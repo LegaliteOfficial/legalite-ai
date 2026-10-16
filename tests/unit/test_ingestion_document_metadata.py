@@ -19,6 +19,7 @@ import pytest
 
 from app.core.config import get_settings
 from app.db.enums import ConfidentialityLevel, VisibilityScope
+from app.ingestion.document_classifier import AUTO_DOC_TYPE, DocumentClassifier
 from app.ingestion.legal_chunker import LegalChunk
 from app.ingestion.pdf_parser import ParsedPdf, PdfPage
 from app.services.ingestion_service import IngestionService
@@ -27,6 +28,9 @@ from app.services.ingestion_service import IngestionService
 class _FakeDocument:
     def __init__(self, doc_id: uuid.UUID) -> None:
         self.id = doc_id
+        self.doc_type: str | None = None
+        self.summary: str | None = None
+        self.doc_type_source: str | None = None
         self.page_count: int | None = None
         self.law_type: str | None = None
         self.act_number: str | None = None
@@ -140,3 +144,44 @@ def test_ingest_pdf_populates_document_level_metadata(isolated_upload_dir: Path)
     assert repo.document.act_number == "1995"
     assert repo.document.effective_year == 1995
     assert repo.status_calls[-1] == ("ingested", None)
+
+
+class _RecordingVectorStore(_FakeVectorStore):
+    def __init__(self) -> None:
+        self.payloads: list[object] = []
+
+    def upsert(self, embeddings: list[list[float]], payloads: list[object]) -> list[str]:
+        self.payloads = payloads
+        return super().upsert(embeddings, payloads)
+
+
+def test_ingest_pdf_auto_doc_type_is_classified_before_indexing(
+    isolated_upload_dir: Path,
+) -> None:
+    """An ``auto`` upload must land under the DETECTED type everywhere —
+    the document row and every vector payload — not the sentinel."""
+    repo = _FakeRepo()
+    store = _RecordingVectorStore()
+    service = IngestionService(
+        db=_FakeDb(),  # type: ignore[arg-type]
+        parser=_FakeParser(),  # type: ignore[arg-type]
+        chunker=_FakeChunker(),  # type: ignore[arg-type]
+        embeddings=_FakeEmbeddings(),  # type: ignore[arg-type]
+        vector_store=store,  # type: ignore[arg-type]
+        classifier=DocumentClassifier(llm_enabled=False),
+    )
+    service._repo = repo  # type: ignore[assignment]
+
+    service.ingest_pdf(
+        file_bytes=b"%PDF-1.4 fake",
+        original_filename="act-1995.pdf",
+        title="Some Act, 1995",
+        doc_type=AUTO_DOC_TYPE,
+        visibility_scope=VisibilityScope.GLOBAL,
+        confidentiality_level=ConfidentialityLevel.PUBLIC,
+    )
+
+    assert repo.document.doc_type == "Act"
+    assert repo.document.doc_type_source == "heuristic"
+    assert repo.document.summary is None
+    assert [p.doc_type for p in store.payloads] == ["Act"]
