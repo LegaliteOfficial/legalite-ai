@@ -24,8 +24,11 @@ Retry policy
 On any unhandled exception:
 
   * The job's ``retry_count`` is bumped.
-  * If retry_count <= ``INGESTION_MAX_RETRIES`` the worker re-raises so
-    Arq schedules a retry.
+  * If retry_count <= ``INGESTION_MAX_RETRIES`` the worker raises
+    ``arq.worker.Retry`` so Arq re-queues the task with a backoff. Arq
+    only retries on ``Retry`` — re-raising the original exception makes
+    Arq record the task as failed and never run it again, which used to
+    leave the job row stuck at ``processing`` with no error message.
   * Otherwise the row is marked ``failed`` with the error message and
     the worker swallows the exception (the task is "done" from Arq's POV).
 """
@@ -37,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from arq.connections import RedisSettings
+from arq.worker import Retry
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
@@ -161,12 +165,14 @@ async def ingest_pdf_task(
             ingestion_job_state.labels(state="retried").inc()
         finally:
             fail_db.close()
-        # Re-raise so Arq schedules a retry.
-        logger.exception("worker.retry_scheduled", job_id=job_id_str)
-        raise
+        logger.exception("worker.retry_scheduled", job_id=job_id_str, attempt=attempts)
+        raise Retry(defer=_RETRY_BACKOFF_SECONDS * attempts) from exc
     finally:
         work_db.close()
 
+
+# Linear backoff between attempts: 10s, 20s, 30s, ...
+_RETRY_BACKOFF_SECONDS = 10
 
 _worker_settings = get_settings()
 
