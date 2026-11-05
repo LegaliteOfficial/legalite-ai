@@ -115,8 +115,23 @@ class StructuredAnswer(BaseModel):
 
 
 class AskRequest(BaseModel):
-    question: str = Field(..., min_length=3, max_length=2000)
+    # min_length=1 so short chat turns ("hi", "ok") are accepted — the chat
+    # agent answers those naturally. Whitespace-only input is rejected by
+    # the route.
+    question: str = Field(..., min_length=1, max_length=4000)
     session_id: str | None = Field(default=None, description="Optional chat session UUID for memory")
+    # Optional on-screen context (e.g. the document open in the editor).
+    # Sent separately from ``question`` so retrieval and memory key off the
+    # user's actual words, and so long documents don't hit the question
+    # length limit. The service clips it to ``ask_context_max_chars``.
+    context: str | None = Field(
+        default=None,
+        max_length=60000,
+        description="Optional on-screen context the assistant may use (treated as data).",
+    )
+
+
+AnswerMode = Literal["grounded", "general", "conversational", "refused"]
 
 
 class AskResponse(BaseModel):
@@ -142,3 +157,14 @@ class AskResponse(BaseModel):
     # ``POST /ask/{message_id}/feedback``. Optional so legacy /ask
     # callers that don't care about feedback can keep ignoring it.
     message_id: str | None = None
+    # Chat agent: how the answer was produced.
+    #   grounded       — cites passages from the Legalite library
+    #   general        — answered from the model's general knowledge
+    #                     (library had nothing citable, or not a legal topic)
+    #   conversational — greeting / small talk / meta
+    #   refused        — legacy strict pipeline refused
+    # None on legacy responses that predate the agent.
+    answer_mode: AnswerMode | None = None
+    # Library searches the agent ran this turn (for UI transparency).
+    searches: list[str] = Field(default_factory=list)
+    model: str | None = None
