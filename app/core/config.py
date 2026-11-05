@@ -107,6 +107,40 @@ class Settings(BaseSettings):
     query_rewriter_enabled: bool = True
     query_rewriter_max_variants: int = 3
 
+    # Ask Legalite chat agent. When enabled, /ask runs a tool-calling
+    # conversational agent (app/rag/chat_agent.py) instead of the strict
+    # one-shot RAG generator: the model answers any question — legal or
+    # not — and calls the hybrid retriever as a tool whenever law is
+    # involved, citing retrieved passages inline as [n].
+    # None = auto-detect: on iff a real-looking OpenAI key is configured
+    # (so unit tests, which use the "test-key" sentinel, keep the legacy
+    # pipeline unless they opt in explicitly).
+    ask_agent_enabled: bool | None = None
+    # Model for the agent. Falls back to OPENAI_LLM_MODEL when unset. The
+    # agent is the user-facing "brain" — use the strongest model the
+    # budget allows (e.g. gpt-4.1 / gpt-4o / a reasoning model).
+    agent_llm_model: str | None = None
+    # Optional cheaper model for purely conversational turns (greetings,
+    # thanks, small talk) the planner is confident about. None = same
+    # model as agent_llm_model.
+    agent_fast_llm_model: str | None = None
+    agent_temperature: float = 0.3
+    agent_max_output_tokens: int = 2000
+    # Upper bound on tool-calling rounds per turn (each round = one LLM
+    # call). Bounds latency + cost on runaway tool loops.
+    agent_max_tool_rounds: int = 4
+    # How many passages a single search_legal_library call returns, and
+    # how much of each passage's text is shown to the model.
+    agent_search_top_k: int = 6
+    agent_passage_max_chars: int = 1800
+    # Conversation memory fed to the agent as real chat turns.
+    agent_memory_window_turns: int = 12
+    agent_memory_max_tokens: int = 6000
+    agent_memory_turn_max_chars: int = 2500
+    # Optional on-screen context (e.g. the open document) sent alongside
+    # a question. Hard cap so one request can't blow the context window.
+    ask_context_max_chars: int = 20000
+
     # Observability
     prometheus_enabled: bool = True
     otel_enabled: bool = False
@@ -206,6 +240,13 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def agent_enabled(self) -> bool:
+        """Resolve ``ask_agent_enabled`` (None = auto-detect from the key)."""
+        if self.ask_agent_enabled is not None:
+            return self.ask_agent_enabled
+        return bool(self.openai_api_key) and self.openai_api_key != "test-key"
 
 
 def _force_psycopg3(url: str) -> str:

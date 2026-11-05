@@ -34,6 +34,14 @@ Event sequence:
       completed  — terminal. Full AskResponse mirror, matches the
                            non-streaming response shape exactly.
 
+    status              — (chat agent) human-readable progress line, e.g.
+                           ``{"phase": "searching", "message": "Searching the
+                           Legalite library: …", "query": "…"}`` or
+                           ``{"phase": "answering", …}``. May repeat — the
+                           agent can run several library searches per turn,
+                           and ``sources_found`` may fire once per search.
+                           Clients that don't know it can ignore it.
+
     error               — terminal, can appear at any point after
                            ``retrieval_started``. Once the first byte of
                            an SSE response is sent, FastAPI can no longer
@@ -85,11 +93,17 @@ async def ask(
 ):
     # NOTE: return-type union annotation removed so slowapi + FastAPI introspection
     # plays nicely with `from __future__ import annotations` not being available here.
+    if not payload.question.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="question must not be empty",
+        )
     if stream:
         events = service.ask_stream(
             payload.question,
             session_id=payload.session_id,
             tenant=tenant,
+            context=payload.context,
         )
         return StreamingResponse(
             to_async(events),
@@ -104,6 +118,7 @@ async def ask(
             payload.question,
             session_id=payload.session_id,
             tenant=tenant,
+            context=payload.context,
         )
     except ValueError as exc:
         raise HTTPException(

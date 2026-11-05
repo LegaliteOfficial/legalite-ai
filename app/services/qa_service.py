@@ -21,6 +21,7 @@ from collections.abc import Iterator
 import structlog
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.telemetry import (
     observe,
@@ -36,6 +37,15 @@ from app.core.tenant_context import TenantContext
 from app.db.repositories.chat_repository import ChatRepository
 from app.ingestion.embedding_service import EmbeddingService
 from app.rag.answer_generator import AnswerGenerator, GeneratedAnswer
+from app.rag.authority import classify as classify_authority
+from app.rag.chat_agent import (
+    AgentResult,
+    AgentStatus,
+    ChatAgent,
+    ChatTurn,
+    clean_history_text,
+    passage_header,
+)
 from app.rag.citation_formatter import format_citations, format_sources
 from app.rag.conversational_responder import ConversationalResponder
 from app.rag.hybrid_retriever import HybridRetriever
@@ -43,16 +53,17 @@ from app.rag.legal_memory import LegalMemory, MemoryContext
 from app.rag.multi_document_reasoner import CrossDocResult, MultiDocumentReasoner
 from app.rag.prompt_builder import DISCLAIMER, REFUSAL_TEXT
 from app.rag.query_planner import (
+    _LEGAL_SUBSTANCE_RE,
     CONVERSATIONAL_INTENTS,
     QueryIntent,
     QueryPlan,
     QueryPlanner,
 )
 from app.rag.query_rewriter import QueryRewriter
+from app.rag.reranker import BaseReranker, build_reranker
 from app.rag.retriever import RetrievedPassage
 from app.rag.streaming import SSEEvent
-from app.rag.reranker import BaseReranker, build_reranker
-from app.schemas.qa import AskResponse, Citation, StructuredAnswer
+from app.schemas.qa import AskResponse, Citation, StructuredAnswer, StructuredCitation
 from app.services.corpus_inventory import CorpusInventoryService
 from app.vector_store.qdrant_client import QdrantVectorStore
 
@@ -71,6 +82,8 @@ class QAService:
         planner: QueryPlanner | None = None,
         rewriter: QueryRewriter | None = None,
         conversational: ConversationalResponder | None = None,
+        agent: ChatAgent | None = None,
+        use_agent: bool | None = None,
     ) -> None:
         from app.vector_store.qdrant_client import get_vector_store
 
@@ -97,6 +110,15 @@ class QAService:
         # request is cheap because the actual Postgres roundtrip only
         # fires on the first call after the cache TTL expires.
         self._corpus_inventory = CorpusInventoryService(db)
+        # Chat agent (Ask Legalite v4). ``use_agent=None`` follows the
+        # ASK_AGENT_ENABLED setting (auto-on with a real OpenAI key). An
+        # explicitly injected agent always wins — that's how tests opt in.
+        if agent is not None:
+            self._agent: ChatAgent | None = agent
+        elif use_agent if use_agent is not None else get_settings().agent_enabled:
+            self._agent = ChatAgent()
+        else:
+            self._agent = None
 
     def ask(
         self,
@@ -104,7 +126,18 @@ class QAService:
         session_id: str | None = None,
         *,
         tenant: TenantContext | None = None,
+        context: str | None = None,
     ) -> AskResponse:
+        if self._agent is not None:
+            final: AskResponse | None = None
+            for item in self._run_agent(question, session_id, tenant=tenant, context=context):
+                if isinstance(item, AskResponse):
+                    final = item
+                elif item.event == "error":
+                    raise RuntimeError(item.data.get("message", "agent failed"))
+            assert final is not None
+            return final
+
         t0 = time.perf_counter()
         sid = self._memory.get_or_create_session(session_id, tenant=tenant)
         with structlog.contextvars.bound_contextvars(
@@ -134,6 +167,7 @@ class QAService:
         session_id: str | None = None,
         *,
         tenant: TenantContext | None = None,
+        context: str | None = None,
     ) -> Iterator[SSEEvent]:
         """SSE event stream that runs the real pipeline live rather than
         replaying a finished :meth:`ask` response.
@@ -156,6 +190,12 @@ class QAService:
         below therefore runs inside a try/except that turns any failure
         into a terminal ``error`` event instead.
         """
+        if self._agent is not None:
+            for item in self._run_agent(question, session_id, tenant=tenant, context=context):
+                if isinstance(item, SSEEvent):
+                    yield item
+            return
+
         t0 = time.perf_counter()
         sid = self._memory.get_or_create_session(session_id, tenant=tenant)
         with structlog.contextvars.bound_contextvars(
@@ -261,6 +301,240 @@ class QAService:
                         ),
                     },
                 )
+
+    # ------------------------------------------------------------------
+    # Chat agent path (Ask Legalite v4)
+    # ------------------------------------------------------------------
+
+    def _run_agent(
+        self,
+        question: str,
+        session_id: str | None,
+        *,
+        tenant: TenantContext | None,
+        context: str | None,
+    ) -> Iterator[SSEEvent | AskResponse]:
+        """Run one chat turn through :class:`ChatAgent`.
+
+        Yields the SSE events the streaming route forwards, and — just
+        before the terminal ``completed`` event — the final
+        :class:`AskResponse` object itself, so :meth:`ask` can share this
+        code path without re-parsing JSON. Event names are a superset of
+        the legacy contract (``retrieval_started`` → ``sources_found`` →
+        ``answer_delta``* → ``citations`` → ``completed`` | ``error``), plus
+        ``status`` events carrying a human-readable progress line.
+        """
+        assert self._agent is not None
+        settings = get_settings()
+        t0 = time.perf_counter()
+        question = (question or "").strip()
+        if not question:
+            raise ValueError("question must not be empty")
+        page_context = (context or "").strip()[: settings.ask_context_max_chars] or None
+
+        sid = self._memory.get_or_create_session(session_id, tenant=tenant)
+        with structlog.contextvars.bound_contextvars(
+            session_id=str(sid),
+            tenant_org=str(tenant.organization_id) if tenant and tenant.organization_id else None,
+        ):
+            yield SSEEvent(
+                event="retrieval_started",
+                data={"session_id": str(sid), "question_chars": len(question)},
+            )
+            answered = False
+            plan: QueryPlan | None = None
+            try:
+                history_turns = self._memory.load_history(
+                    sid,
+                    window_turns=settings.agent_memory_window_turns,
+                    max_tokens=settings.agent_memory_max_tokens,
+                )
+                self._memory.append_user(sid, question)
+                history = [
+                    ChatTurn(
+                        role="assistant" if t.role == "assistant" else "user",
+                        content=clean_history_text(t.content, settings.agent_memory_turn_max_chars),
+                    )
+                    for t in history_turns
+                ]
+
+                plan = self._planner.plan(question, has_memory=bool(history))
+                org_label = (
+                    str(tenant.organization_id) if tenant and tenant.organization_id else None
+                )
+                scope_label = "tenant" if org_label else "anonymous"
+                record_tenant_request(org_label, "/ask")
+
+                conversational = (
+                    plan.intent in CONVERSATIONAL_INTENTS
+                    and plan.intent != QueryIntent.CONVERSATIONAL_UNCLEAR
+                    and page_context is None
+                )
+                force_search = (
+                    plan.intent in _FORCE_SEARCH_INTENTS
+                    and plan.confidence >= 0.5
+                    and bool(_LEGAL_SUBSTANCE_RE.search(question))
+                )
+                logger.info(
+                    "qa.agent.planned",
+                    intent=plan.intent.value,
+                    confidence=plan.confidence,
+                    force_search=force_search,
+                    conversational=conversational,
+                )
+
+                def _search(query: str) -> list[RetrievedPassage]:
+                    with (
+                        traced("qa.retrieve", intent=plan.intent.value, scope=scope_label),
+                        observe(retrieval_latency, scope=scope_label),
+                    ):
+                        return self._reasoner.gather(query, tenant=tenant).passages
+
+                result: AgentResult | None = None
+                with traced("qa.agent", intent=plan.intent.value, scope=scope_label):
+                    for item in self._agent.run_stream(
+                        question,
+                        history=history,
+                        search_fn=_search,
+                        inventory_fn=self._corpus_inventory.get,
+                        force_search=force_search,
+                        conversational=conversational,
+                        tenant_label=f"role: {tenant.role.value}" if org_label and tenant else None,
+                        page_context=page_context,
+                    ):
+                        if isinstance(item, AgentResult):
+                            result = item
+                        elif isinstance(item, str):
+                            answered = True
+                            yield SSEEvent(event="answer_delta", data={"text": item})
+                        else:
+                            yield from _status_events(item)
+                assert result is not None
+
+                response = self._finalize_agent(sid, question, plan, scope_label, result, t0)
+                sa = response.structured_answer
+                assert sa is not None
+                yield SSEEvent(
+                    event="citations",
+                    data={
+                        "applicable_law": [c.model_dump() for c in sa.applicable_law],
+                        "relevant_public_cases": [c.model_dump() for c in sa.relevant_public_cases],
+                        "firm_similar_cases": [c.model_dump() for c in sa.firm_similar_cases],
+                        "citation_ids": sa.citations,
+                    },
+                )
+                yield response
+                yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
+            except Exception:
+                logger.exception("qa.agent_failed", question_chars=len(question))
+                # Graceful degradation: if nothing was streamed yet and the
+                # turn was small talk, answer from the deterministic
+                # templates rather than showing an error for "hi".
+                if not answered and plan is not None and plan.intent in CONVERSATIONAL_INTENTS:
+                    try:
+                        response = self._conversational_fallback(sid, question, plan)
+                        yield response
+                        yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
+                        return
+                    except Exception:  # noqa: BLE001
+                        logger.exception("qa.agent_fallback_failed")
+                yield SSEEvent(
+                    event="error",
+                    data={
+                        "message": (
+                            "The AI service hit an unexpected error while answering. "
+                            "Please try again."
+                        ),
+                    },
+                )
+
+    def _finalize_agent(
+        self,
+        sid: uuid.UUID,
+        question: str,
+        plan: QueryPlan,
+        scope_label: str,
+        result: AgentResult,
+        t0: float,
+    ) -> AskResponse:
+        cited = result.cited_passages
+        citations = format_citations(cited)
+        sources = format_sources(cited)
+        structured = _agent_structured_answer(result)
+        record_ask(scope=scope_label, intent=plan.intent.value, confidence=result.confidence)
+        searches = [
+            str(tc.arguments.get("query", ""))
+            for tc in result.tool_calls
+            if tc.name == "search_legal_library"
+        ]
+
+        msg_id = self._memory.append_assistant(
+            sid,
+            result.answer,
+            metadata={
+                "confidence": result.confidence,
+                "confidence_score": result.confidence_score,
+                "refused": False,
+                "citations": [c.model_dump() for c in citations],
+                "query_intent": plan.intent.value,
+                "answer_mode": result.mode,
+                "agent": True,
+                "model": result.model,
+                "searches": searches,
+            },
+        )
+        total_ms = int((time.perf_counter() - t0) * 1000)
+        logger.info(
+            "qa.agent.answered",
+            intent=plan.intent.value,
+            mode=result.mode,
+            confidence=result.confidence,
+            model=result.model,
+            rounds=result.rounds,
+            searches=searches,
+            passages=len(result.passages),
+            cited=result.cited_ids,
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            gen_latency_ms=result.latency_ms,
+            total_latency_ms=total_ms,
+        )
+        return AskResponse(
+            answer=result.answer,
+            citations=citations,
+            confidence=result.confidence,
+            sources_used=sources,
+            reasoning_summary="",
+            session_id=str(sid),
+            structured_answer=structured,
+            query_intent=plan.intent.value,
+            query_intent_confidence=plan.confidence,
+            message_id=str(msg_id),
+            answer_mode=result.mode,
+            searches=searches,
+            model=result.model,
+        )
+
+    def _conversational_fallback(
+        self, sid: uuid.UUID, question: str, plan: QueryPlan
+    ) -> AskResponse:
+        conv = self._conversational.respond(question, plan.intent, inventory=None)
+        msg_id = self._memory.append_assistant(
+            sid,
+            conv.answer,
+            metadata={"conversational": True, "query_intent": plan.intent.value, "fallback": True},
+        )
+        return AskResponse(
+            answer=conv.answer,
+            citations=[],
+            confidence=conv.confidence,
+            session_id=str(sid),
+            structured_answer=conv.structured,
+            query_intent=plan.intent.value,
+            query_intent_confidence=plan.confidence,
+            message_id=str(msg_id),
+            answer_mode="conversational",
+        )
 
     def get_or_create_session(
         self,
@@ -512,4 +786,109 @@ def _planner_refusal(session_id: uuid.UUID, plan: QueryPlan) -> AskResponse:
         structured_answer=structured,
         query_intent=plan.intent.value,
         query_intent_confidence=plan.confidence,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Chat agent helpers
+# ---------------------------------------------------------------------------
+
+# Intents for which the first agent round is forced to search the library
+# (when the question also carries legal vocabulary). Grounding for clearly
+# legal questions should never depend on the model choosing to search.
+_FORCE_SEARCH_INTENTS: frozenset[QueryIntent] = frozenset(
+    {
+        QueryIntent.STATUTE_QUESTION,
+        QueryIntent.CASE_SIMILARITY,
+        QueryIntent.CASE_COMPARISON,
+        QueryIntent.CASE_SUMMARY,
+        QueryIntent.PROCEDURAL_QUESTION,
+        QueryIntent.TENANT_CONTEXTUAL,
+    }
+)
+
+_CASE_TIERS = frozenset({"public_case_law"})
+
+
+def _status_events(status: AgentStatus) -> Iterator[SSEEvent]:
+    """Translate agent progress into SSE events.
+
+    ``sources_found`` keeps the legacy shape so older clients still flip
+    their "answering" phase; ``status`` is the new human-readable line.
+    """
+    if status.kind == "searching":
+        yield SSEEvent(
+            event="status",
+            data={
+                "phase": "searching",
+                "message": f"Searching the Legalite library: “{status.query}”",
+                "query": status.query,
+            },
+        )
+    elif status.kind == "sources":
+        yield SSEEvent(
+            event="sources_found",
+            data={
+                "count": status.count,
+                "scopes": status.scopes or {"global": 0, "tenant_private": 0},
+            },
+        )
+    elif status.kind == "answering":
+        yield SSEEvent(event="status", data={"phase": "answering", "message": "Writing the answer"})
+
+
+def _agent_structured_answer(result: AgentResult) -> StructuredAnswer:
+    """Map the agent's markdown answer + cited passages onto the existing
+    7-section ``StructuredAnswer`` so every client keeps working.
+
+    The whole markdown answer is ``direct_answer``; the citation groups are
+    derived from the authority tier of each *cited* passage (only passages
+    the answer actually references, never everything retrieved).
+    """
+    law: list[StructuredCitation] = []
+    cases: list[StructuredCitation] = []
+    firm: list[StructuredCitation] = []
+    for n in result.cited_ids:
+        p = result.passages[n - 1]
+        tier = classify_authority(p)
+        excerpt = " ".join(p.content.split())
+        cite = StructuredCitation(
+            citation_id=n,
+            summary=(excerpt[:220] + "…") if len(excerpt) > 220 else excerpt,
+            law_name=p.law or passage_header(p),
+            section=p.section or "",
+            article=p.article or "",
+            case_title=(p.law or "") if (tier.tier in _CASE_TIERS or not tier.is_global) else "",
+            document_id=p.document_id,
+            chunk_id=p.chunk_id,
+            page_number=p.page_start,
+        )
+        if not tier.is_global:
+            firm.append(cite)
+        elif tier.tier in _CASE_TIERS:
+            cases.append(cite)
+        else:
+            law.append(cite)
+
+    if result.mode == "general":
+        note = (
+            "Not found in the Legalite library — answered from general knowledge. "
+            "Verify against the current law before relying on it."
+            if result.tool_calls
+            else ""
+        )
+    elif result.mode == "grounded":
+        n = len(result.cited_ids)
+        note = f"Grounded in {n} passage{'s' if n != 1 else ''} from the Legalite library."
+    else:
+        note = ""
+
+    return StructuredAnswer(
+        direct_answer=result.answer,
+        applicable_law=law,
+        relevant_public_cases=cases,
+        firm_similar_cases=firm,
+        legal_reasoning="",
+        confidence_assessment=note,
+        citations=list(result.cited_ids),
     )

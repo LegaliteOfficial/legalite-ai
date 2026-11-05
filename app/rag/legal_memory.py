@@ -83,6 +83,21 @@ class LegalMemory:
         )
         return MemoryContext(session_id=session_id, turns=turns)
 
+    def load_history(
+        self,
+        session_id: uuid.UUID,
+        *,
+        window_turns: int,
+        max_tokens: int,
+    ) -> list[MemoryTurn]:
+        """Wider history window for the chat agent.
+
+        Same storage and budget rule as :meth:`load_recent`, but with the
+        agent's own (larger) window so follow-ups can refer back further.
+        """
+        messages = self._repo.get_recent_messages(session_id, limit=window_turns * 2)
+        return _truncate_to_budget([_to_turn(m) for m in messages], max_tokens=max_tokens)
+
     def append_user(self, session_id: uuid.UUID, content: str) -> None:
         self._repo.add_message(session_id, role="user", content=content)
 
