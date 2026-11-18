@@ -13,6 +13,7 @@ from app.api.routes import (
     cases,
     document_view,
     documents,
+    drafting,
     feedback,
     health,
     jobs,
@@ -109,6 +110,7 @@ def create_app() -> FastAPI:
     app.include_router(documents.router)
     app.include_router(document_view.router)
     app.include_router(qa.router)
+    app.include_router(drafting.router)
     app.include_router(feedback.router)
     app.include_router(sessions.router)
     app.include_router(cases.router)
