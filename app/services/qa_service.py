@@ -64,8 +64,24 @@ from app.rag.query_rewriter import QueryRewriter
 from app.rag.reranker import BaseReranker, build_reranker
 from app.rag.retriever import RetrievedPassage
 from app.rag.streaming import SSEEvent
+from app.rag.workspace_consent import (
+    AccessResolution,
+    ConsentDecision,
+    ConsentStore,
+    InMemoryConsentStore,
+    PermissionRequest,
+    SessionConsentStore,
+    resolve_access,
+    token_subject,
+)
 from app.rag.workspace_tools import WorkspaceToolkit
-from app.schemas.qa import AskResponse, Citation, StructuredAnswer, StructuredCitation
+from app.schemas.qa import (
+    AskResponse,
+    Citation,
+    PermissionRequestOut,
+    StructuredAnswer,
+    StructuredCitation,
+)
 from app.services.corpus_inventory import CorpusInventoryService
 from app.vector_store.qdrant_client import QdrantVectorStore
 
@@ -88,6 +104,7 @@ class QAService:
         use_agent: bool | None = None,
         workspace_factory: Callable[[str], WorkspaceToolkit] | None = None,
         summarizer: Summarizer | None = None,
+        consent_store: ConsentStore | None = None,
     ) -> None:
         from app.vector_store.qdrant_client import get_vector_store
 
@@ -128,6 +145,7 @@ class QAService:
             self._agent = None
         # Tests inject a factory; production builds a GraphQL-backed toolkit.
         self._workspace_factory = workspace_factory
+        self._consent_store = consent_store
 
     def ask(
         self,
@@ -138,6 +156,7 @@ class QAService:
         context: str | None = None,
         user_token: str | None = None,
         client_history: list[MemoryTurn] | None = None,
+        workspace_consent: ConsentDecision | None = None,
     ) -> AskResponse:
         if self._agent is not None:
             final: AskResponse | None = None
@@ -148,6 +167,7 @@ class QAService:
                 context=context,
                 user_token=user_token,
                 client_history=client_history,
+                workspace_consent=workspace_consent,
             ):
                 if isinstance(item, AskResponse):
                     final = item
@@ -188,6 +208,7 @@ class QAService:
         context: str | None = None,
         user_token: str | None = None,
         client_history: list[MemoryTurn] | None = None,
+        workspace_consent: ConsentDecision | None = None,
     ) -> Iterator[SSEEvent]:
         """SSE event stream that runs the real pipeline live rather than
         replaying a finished :meth:`ask` response.
@@ -218,6 +239,7 @@ class QAService:
                 context=context,
                 user_token=user_token,
                 client_history=client_history,
+                workspace_consent=workspace_consent,
             ):
                 if isinstance(item, SSEEvent):
                     yield item
@@ -342,6 +364,7 @@ class QAService:
         context: str | None,
         user_token: str | None = None,
         client_history: list[MemoryTurn] | None = None,
+        workspace_consent: ConsentDecision | None = None,
     ) -> Iterator[SSEEvent | AskResponse]:
         """Run one chat turn through :class:`ChatAgent`.
 
@@ -352,6 +375,12 @@ class QAService:
         the legacy contract (``retrieval_started`` → ``sources_found`` →
         ``answer_delta``* → ``citations`` → ``completed`` | ``error``), plus
         ``status`` events carrying a human-readable progress line.
+
+        Workspace consent: when the user's data is needed and they have not
+        allowed it (see ``app/rag/workspace_consent.py``) the turn ends with
+        a ``permission_required`` event instead of an answer. Nothing is
+        written to memory for a paused turn; the client resends the same
+        question with ``workspace_consent`` and the turn runs in full.
         """
         assert self._agent is not None
         settings = get_settings()
@@ -371,6 +400,7 @@ class QAService:
                 data={"session_id": str(sid), "question_chars": len(question)},
             )
             answered = False
+            user_saved = False
             plan: QueryPlan | None = None
             try:
                 if client_history:
@@ -383,7 +413,6 @@ class QAService:
                     summarizer=self._summarizer,
                 )
                 memory_note = build_memory_message(conv)
-                self._memory.append_user(sid, question)
                 history = [
                     ChatTurn(
                         role="assistant" if t.role == "assistant" else "user",
@@ -417,7 +446,24 @@ class QAService:
                     ):
                         return self._reasoner.gather(query, tenant=tenant).passages
 
-                workspace = self._workspace_for(user_token)
+                toolkit = self._workspace_for(user_token)
+                access = self._resolve_workspace_access(
+                    sid, question, toolkit, user_token, workspace_consent
+                )
+                workspace = toolkit if access.access in ("granted", "ask") else None
+                profile = (
+                    toolkit.profile_context(tools_available=False)
+                    if toolkit is not None and workspace is None
+                    else None
+                )
+                if access.access == "granted" and access.decision == "allow":
+                    yield SSEEvent(
+                        event="status",
+                        data={
+                            "phase": "workspace",
+                            "message": "Workspace access allowed for this request",
+                        },
+                    )
                 result: AgentResult | None = None
                 with traced("qa.agent", intent=plan.intent.value, scope=scope_label):
                     for item in self._agent.run_stream(
@@ -430,6 +476,8 @@ class QAService:
                         tenant_label=f"role: {tenant.role.value}" if org_label and tenant else None,
                         page_context=page_context,
                         workspace=workspace,
+                        workspace_access=access.access,
+                        profile=profile,
                         conversation_memory=memory_note,
                     ):
                         if isinstance(item, AgentResult):
@@ -441,7 +489,23 @@ class QAService:
                             yield from _status_events(item)
                 assert result is not None
 
+                if result.mode == "permission_required":
+                    response = self._pause_for_permission(
+                        sid, question, plan, result, user_token
+                    )
+                    assert response.permission_request is not None
+                    yield SSEEvent(
+                        event="permission_required",
+                        data=response.permission_request.model_dump(mode="json"),
+                    )
+                    yield response
+                    yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
+                    return
+
+                self._memory.append_user(sid, question)
+                user_saved = True
                 response = self._finalize_agent(sid, question, plan, scope_label, result, t0)
+                response.workspace_access = access.access
                 sa = response.structured_answer
                 assert sa is not None
                 yield SSEEvent(
@@ -457,6 +521,14 @@ class QAService:
                 yield SSEEvent(event="completed", data=response.model_dump(mode="json"))
             except Exception:
                 logger.exception("qa.agent_failed", question_chars=len(question))
+                if not user_saved:
+                    # Keep the user's words in the thread even when the
+                    # answer failed, as before the consent gate.
+                    try:
+                        self._memory.append_user(sid, question)
+                        user_saved = True
+                    except Exception:  # noqa: BLE001
+                        logger.exception("qa.agent_save_user_failed")
                 # Graceful degradation: if nothing was streamed yet and the
                 # turn was small talk, answer from the deterministic
                 # templates rather than showing an error for "hi".
@@ -550,6 +622,81 @@ class QAService:
             searches=searches,
             model=result.model,
             proposed_actions=[a.to_dict() for a in result.proposed_actions],
+        )
+
+    # -- workspace consent ----------------------------------------------
+
+    def _consent(self) -> ConsentStore:
+        if self._consent_store is None:
+            if hasattr(self._memory, "get_meta") and hasattr(self._memory, "set_meta"):
+                self._consent_store = SessionConsentStore(self._memory)
+            else:
+                self._consent_store = InMemoryConsentStore()
+        return self._consent_store
+
+    def _resolve_workspace_access(
+        self,
+        sid: uuid.UUID,
+        question: str,
+        toolkit: WorkspaceToolkit | None,
+        user_token: str | None,
+        decision: ConsentDecision | None,
+    ) -> AccessResolution:
+        if toolkit is None:
+            return resolve_access(
+                workspace_available=False, preference="ask", decision=None, redeemed=False
+            )
+        preference = toolkit.access_preference()
+        redeemed = False
+        if decision is not None:
+            redeemed = self._consent().redeem(
+                sid, decision.request_id, subject=token_subject(user_token), question=question
+            )
+        res = resolve_access(
+            workspace_available=True,
+            preference=preference,
+            decision=decision,
+            redeemed=redeemed,
+        )
+        logger.info(
+            "qa.workspace_access",
+            access=res.access,
+            preference=res.preference,
+            decision=res.decision,
+            notes=res.notes or None,
+        )
+        return res
+
+    def _pause_for_permission(
+        self,
+        sid: uuid.UUID,
+        question: str,
+        plan: QueryPlan,
+        result: AgentResult,
+        user_token: str | None,
+    ) -> AskResponse:
+        request_id, expires_at = self._consent().issue(
+            sid, subject=token_subject(user_token), question=question
+        )
+        req = PermissionRequest(
+            request_id=request_id,
+            scopes=result.permission_scopes,
+            tools=result.permission_tools,
+            expires_at=expires_at,
+        )
+        logger.info("qa.workspace_permission_requested", tools=req.tools)
+        return AskResponse(
+            answer=result.answer,
+            citations=[],
+            confidence="high",
+            session_id=str(sid),
+            structured_answer=StructuredAnswer(direct_answer=result.answer),
+            query_intent=plan.intent.value,
+            query_intent_confidence=plan.confidence,
+            answer_mode="permission_required",
+            model=result.model,
+            permission_request=PermissionRequestOut(**req.to_dict()),
+            workspace_access="ask",
         )
 
     def _workspace_for(self, user_token: str | None) -> WorkspaceToolkit | None:

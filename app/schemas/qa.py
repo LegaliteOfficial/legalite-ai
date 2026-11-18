@@ -119,6 +119,23 @@ class HistoryTurn(BaseModel):
     content: str = Field(..., max_length=20000)
 
 
+class WorkspaceConsentIn(BaseModel):
+    decision: Literal["allow", "deny"]
+    request_id: str = Field(..., min_length=1, max_length=64)
+
+
+class PermissionRequestOut(BaseModel):
+    """The turn paused for permission to read the user's workspace."""
+
+    request_id: str
+    # Plain-language lines: what the assistant wanted to look at.
+    scopes: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    # Unix seconds after which the request_id is no longer accepted.
+    expires_at: int
+    reason: Literal["workspace"] = "workspace"
+
+
 class AskRequest(BaseModel):
     # min_length=1 so short chat turns ("hi", "ok") are accepted — the chat
     # agent answers those naturally. Whitespace-only input is rejected by
@@ -142,9 +159,15 @@ class AskRequest(BaseModel):
     # the server lost — to seed server memory so the assistant still
     # remembers it. Ignored once the server holds the conversation.
     history: list[HistoryTurn] | None = Field(default=None, max_length=60)
+    # The user's answer to a workspace permission card, sent with the same
+    # question the card was raised for. See app/rag/workspace_consent.py.
+    workspace_consent: WorkspaceConsentIn | None = None
 
 
-AnswerMode = Literal["grounded", "general", "conversational", "workspace", "refused"]
+AnswerMode = Literal[
+    "grounded", "general", "conversational", "workspace", "refused", "permission_required"
+]
+WorkspaceAccessOut = Literal["granted", "ask", "denied", "disabled", "unavailable"]
 
 
 class AskResponse(BaseModel):
@@ -186,3 +209,8 @@ class AskResponse(BaseModel):
     # confirmation card and runs the GraphQL mutation on confirm. Shape:
     # {id, type, summary, payload, display} — see app/rag/workspace_tools.py.
     proposed_actions: list[dict[str, Any]] = Field(default_factory=list)
+    # Set when answer_mode == "permission_required": the client shows a
+    # permission card and resends the question with ``workspace_consent``.
+    permission_request: PermissionRequestOut | None = None
+    # How the workspace was treated on this turn (None on legacy paths).
+    workspace_access: WorkspaceAccessOut | None = None
