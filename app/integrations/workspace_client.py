@@ -42,7 +42,7 @@ _CASE_FIELDS = """
 _PROFILE_QUERY = """
 query AgentProfile {
   me { id name first_name email role }
-  currentFirm { name city firm_type }
+  currentFirm { name city firm_type office_address digital_address email }
   myPracticeAreas { name is_primary }
 }
 """

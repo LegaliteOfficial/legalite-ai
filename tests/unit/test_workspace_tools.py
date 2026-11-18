@@ -368,3 +368,85 @@ def test_agent_without_workspace_is_told_it_cannot_see_it() -> None:
     offered = {t["function"]["name"] for t in client.requests[0]["tools"]}
     assert "find_cases" not in offered
     assert "not signed in" in client.requests[0]["messages"][1]["content"]
+
+
+# ---- updates, events, resolution, caps --------------------------------------------
+
+
+def test_propose_task_update_and_ids_in_listing() -> None:
+    kit = _kit()
+    listing = kit.execute("list_tasks", {})
+    assert "task_id=t1" in listing.content
+    out = kit.execute("propose_task_update", {"task_id": "t1", "status": "done"})
+    assert out.proposal is not None
+    assert out.proposal.type == "update_task"
+    assert out.proposal.payload == {"id": "t1", "input": {"status": "Done"}}
+    assert "mark Done" in out.proposal.summary
+
+
+def test_propose_update_requires_a_change_and_known_id() -> None:
+    assert _kit().execute("propose_task_update", {"task_id": "t1"}).proposal is None
+    assert (
+        _kit().execute("propose_task_update", {"task_id": "zz", "status": "Done"}).proposal is None
+    )
+    bad_status = _kit().execute(
+        "propose_deadline_update", {"deadline_id": "d1", "status": "Finished"}
+    )
+    assert bad_status.proposal is None and "status must be" in bad_status.content
+
+
+def test_propose_deadline_update_reschedules() -> None:
+    out = _kit().execute("propose_deadline_update", {"deadline_id": "d1", "due_date": "2026-11-27"})
+    assert out.proposal is not None
+    assert out.proposal.payload == {"id": "d1", "input": {"due_date": "2026-11-27"}}
+
+
+def test_propose_event_times_and_client() -> None:
+    out = _kit().execute(
+        "propose_event",
+        {
+            "title": "Meet Ama",
+            "start": "2026-11-23T10:00",
+            "duration_minutes": 30,
+            "client_id": "Ama Asante",
+        },
+    )
+    assert out.proposal is not None
+    p = out.proposal.payload
+    assert p["start_time"] == "2026-11-23T10:00:00Z"
+    assert p["end_time"] == "2026-11-23T10:30:00Z"
+    assert p["all_day"] is False and p["event_type"] == "meeting"
+    assert p["client_id"] == "cl-2"
+    all_day = _kit().execute("propose_event", {"title": "Retreat", "start": "2026-12-01"})
+    assert all_day.proposal is not None and all_day.proposal.payload["all_day"] is True
+
+
+def test_case_resolved_by_code_suit_number_or_title() -> None:
+    for ref in ("case-1", "LD/123/2026", "Mensah v Owusu (land boundary)"):
+        out = _kit().execute("propose_task", {"title": "x", "case_id": ref})
+        assert out.proposal is not None, ref
+        assert out.proposal.payload["case_id"] == "case-1"
+
+
+def test_proposals_capped_per_turn() -> None:
+    kit = _kit()
+    made = [kit.execute("propose_task", {"title": f"t{i}"}).proposal for i in range(7)]
+    assert sum(p is not None for p in made) == 5
+    assert made[-1] is None
+
+
+def test_list_deadlines_includes_due_tasks_and_windows_events() -> None:
+    out = _kit().execute("list_deadlines", {"days_ahead": 2})
+    assert "Call client" in out.content  # task due tomorrow
+    assert "Hearing" not in out.content  # event 3 days out, outside window
+
+
+def test_context_distinguishes_workspace_from_tenant_scope() -> None:
+    from app.rag.chat_agent import build_context_message
+
+    signed_in = build_context_message(
+        tenant_label=None, page_context=None, workspace_available=True
+    )
+    assert "not signed in" not in signed_in
+    signed_out = build_context_message(tenant_label=None, page_context=None)
+    assert "not signed in" in signed_out

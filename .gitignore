@@ -36,3 +36,4 @@ uploads/
 # not something to accumulate in git history. Commit a specific baseline
 # report deliberately (git add -f) if you want one preserved.
 evaluation/results/
+evaluation/agent_chat/results/
