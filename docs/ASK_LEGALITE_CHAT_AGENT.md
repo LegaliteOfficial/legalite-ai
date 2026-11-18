@@ -60,6 +60,48 @@ Key properties:
   is `structured_answer.direct_answer`, cited passages populate
   `applicable_law` / `relevant_public_cases` / `firm_similar_cases` by authority tier.
 
+## Workspace tools (v5): the assistant works with the user's own practice
+
+_Added 2026-11-18._ `app/rag/workspace_tools.py`, `app/integrations/workspace_client.py`.
+
+```
+browser ── Authorization: Bearer <user JWT> ──► /ask ──► ChatAgent
+                                                       │  read tools ──► NestJS GraphQL (same JWT)
+                                                       │                 └─ auth, firm tenancy, permissions enforced there
+                                                       │  propose_* ──► action_proposed SSE + AskResponse.proposed_actions
+                                                       ▼
+UI confirmation card ── user clicks Confirm ──► createCase / createDeadline / createDocument … (GraphQL, user's session)
+```
+
+- **Delegated access, not a second data path.** The agent reads cases, clients,
+  deadlines, calendar, tasks and documents through the existing GraphQL API
+  with the signed-in user's own token. It can never see more than the user can
+  in the app, and no access rules are duplicated here. The token is only
+  forwarded, never stored or logged.
+- **Human-in-the-loop writes.** `propose_case|client|deadline|task|document`
+  validate and normalise (ISO dates, priorities, case/client ids resolved to
+  names) but never write. The UI shows a card; Confirm runs the normal
+  mutation (`legalite-app/lib/ai/actions.ts`). An LLM misreading intent can at
+  worst show a card the user dismisses.
+- **Personalisation.** Each turn's context message carries the user's name,
+  firm, city and practice areas (`me`, `currentFirm`, `myPracticeAreas`).
+- **Case inference** = `get_case` (facts, parties, documents, deadlines, tasks)
+  + `read_document` + `search_legal_library`, then issue → law → application →
+  strengths/weaknesses → next steps (prompt section `WORKSPACE_PROMPT`).
+- **Drafting.** "Draft a document" produces the full draft inline and a
+  `propose_document` card that saves it (markdown converted to the editor's HTML)
+  under the right case.
+- `answer_mode="workspace"` labels answers drawn only from the user's own data.
+- Anonymous callers get the library-only agent and are told to sign in for
+  workspace features. Workspace tools turn off when
+  `LEGALITE_BACKEND_GRAPHQL_URL` is blank.
+
+Next steps worth doing: durable per-user memory ("prefers British spelling",
+"usually acts for landlords") stored in this service and injected into the
+context; a `propose_calendar_event` tool; update/complete actions (mark task
+done, reschedule deadline) using the same proposal pattern; and an eval set of
+workspace conversations.
+
 ## Scaling the intelligence further — prioritised roadmap
 
 Ordered by impact ÷ effort. Each item is independent.
@@ -137,6 +179,10 @@ Ordered by impact ÷ effort. Each item is independent.
 | `AGENT_MEMORY_WINDOW_TURNS` | 12 | history turns |
 | `AGENT_MEMORY_MAX_TOKENS` | 6000 | history budget |
 | `ASK_CONTEXT_MAX_CHARS` | 20000 | on-screen context cap |
+| `LEGALITE_BACKEND_GRAPHQL_URL` | unset | NestJS GraphQL endpoint; unset disables workspace tools |
+| `AGENT_WORKSPACE_TOOLS_ENABLED` | true | kill switch for workspace tools |
+| `AGENT_WORKSPACE_MAX_TOOL_ROUNDS` | 6 | tool rounds when workspace tools are active |
+| `WORKSPACE_REQUEST_TIMEOUT_SECONDS` | 10 | per GraphQL call |
 
 Tests: `tests/unit/test_chat_agent.py` (fake streaming OpenAI client — tool
 calls, citation validation, loop bound, dedup, QAService contract, fallback).

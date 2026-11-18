@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -131,7 +131,7 @@ class AskRequest(BaseModel):
     )
 
 
-AnswerMode = Literal["grounded", "general", "conversational", "refused"]
+AnswerMode = Literal["grounded", "general", "conversational", "workspace", "refused"]
 
 
 class AskResponse(BaseModel):
@@ -168,3 +168,8 @@ class AskResponse(BaseModel):
     # Library searches the agent ran this turn (for UI transparency).
     searches: list[str] = Field(default_factory=list)
     model: str | None = None
+    # Records the agent proposed creating this turn (case, client, deadline,
+    # task, document). Nothing is created server-side: the client shows a
+    # confirmation card and runs the GraphQL mutation on confirm. Shape:
+    # {id, type, summary, payload, display} — see app/rag/workspace_tools.py.
+    proposed_actions: list[dict[str, Any]] = Field(default_factory=list)

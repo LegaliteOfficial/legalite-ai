@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import structlog
 from sqlalchemy.orm import Session
@@ -63,6 +63,7 @@ from app.rag.query_rewriter import QueryRewriter
 from app.rag.reranker import BaseReranker, build_reranker
 from app.rag.retriever import RetrievedPassage
 from app.rag.streaming import SSEEvent
+from app.rag.workspace_tools import WorkspaceToolkit
 from app.schemas.qa import AskResponse, Citation, StructuredAnswer, StructuredCitation
 from app.services.corpus_inventory import CorpusInventoryService
 from app.vector_store.qdrant_client import QdrantVectorStore
@@ -84,6 +85,7 @@ class QAService:
         conversational: ConversationalResponder | None = None,
         agent: ChatAgent | None = None,
         use_agent: bool | None = None,
+        workspace_factory: Callable[[str], WorkspaceToolkit] | None = None,
     ) -> None:
         from app.vector_store.qdrant_client import get_vector_store
 
@@ -119,6 +121,8 @@ class QAService:
             self._agent = ChatAgent()
         else:
             self._agent = None
+        # Tests inject a factory; production builds a GraphQL-backed toolkit.
+        self._workspace_factory = workspace_factory
 
     def ask(
         self,
@@ -127,10 +131,13 @@ class QAService:
         *,
         tenant: TenantContext | None = None,
         context: str | None = None,
+        user_token: str | None = None,
     ) -> AskResponse:
         if self._agent is not None:
             final: AskResponse | None = None
-            for item in self._run_agent(question, session_id, tenant=tenant, context=context):
+            for item in self._run_agent(
+                question, session_id, tenant=tenant, context=context, user_token=user_token
+            ):
                 if isinstance(item, AskResponse):
                     final = item
                 elif item.event == "error":
@@ -168,6 +175,7 @@ class QAService:
         *,
         tenant: TenantContext | None = None,
         context: str | None = None,
+        user_token: str | None = None,
     ) -> Iterator[SSEEvent]:
         """SSE event stream that runs the real pipeline live rather than
         replaying a finished :meth:`ask` response.
@@ -191,7 +199,9 @@ class QAService:
         into a terminal ``error`` event instead.
         """
         if self._agent is not None:
-            for item in self._run_agent(question, session_id, tenant=tenant, context=context):
+            for item in self._run_agent(
+                question, session_id, tenant=tenant, context=context, user_token=user_token
+            ):
                 if isinstance(item, SSEEvent):
                     yield item
             return
@@ -313,6 +323,7 @@ class QAService:
         *,
         tenant: TenantContext | None,
         context: str | None,
+        user_token: str | None = None,
     ) -> Iterator[SSEEvent | AskResponse]:
         """Run one chat turn through :class:`ChatAgent`.
 
@@ -390,6 +401,7 @@ class QAService:
                     ):
                         return self._reasoner.gather(query, tenant=tenant).passages
 
+                workspace = self._workspace_for(user_token)
                 result: AgentResult | None = None
                 with traced("qa.agent", intent=plan.intent.value, scope=scope_label):
                     for item in self._agent.run_stream(
@@ -401,6 +413,7 @@ class QAService:
                         conversational=conversational,
                         tenant_label=f"role: {tenant.role.value}" if org_label and tenant else None,
                         page_context=page_context,
+                        workspace=workspace,
                     ):
                         if isinstance(item, AgentResult):
                             result = item
@@ -481,6 +494,12 @@ class QAService:
                 "agent": True,
                 "model": result.model,
                 "searches": searches,
+                "workspace_tools": [
+                    tc.name
+                    for tc in result.tool_calls
+                    if tc.name not in ("search_legal_library", "describe_legal_library")
+                ],
+                "proposed_actions": [a.to_dict() for a in result.proposed_actions],
             },
         )
         total_ms = int((time.perf_counter() - t0) * 1000)
@@ -513,7 +532,24 @@ class QAService:
             answer_mode=result.mode,
             searches=searches,
             model=result.model,
+            proposed_actions=[a.to_dict() for a in result.proposed_actions],
         )
+
+    def _workspace_for(self, user_token: str | None) -> WorkspaceToolkit | None:
+        """Bind workspace tools to this request's user, or ``None`` when the
+        caller is anonymous or the integration is not configured."""
+        settings = get_settings()
+        if (
+            not user_token
+            or not settings.agent_workspace_tools_enabled
+            or not settings.legalite_backend_graphql_url
+        ):
+            return None
+        if self._workspace_factory is not None:
+            return self._workspace_factory(user_token)
+        from app.integrations.workspace_client import WorkspaceClient
+
+        return WorkspaceToolkit(WorkspaceClient(bearer_token=user_token))
 
     def _conversational_fallback(
         self, sid: uuid.UUID, question: str, plan: QueryPlan
@@ -835,6 +871,10 @@ def _status_events(status: AgentStatus) -> Iterator[SSEEvent]:
         )
     elif status.kind == "answering":
         yield SSEEvent(event="status", data={"phase": "answering", "message": "Writing the answer"})
+    elif status.kind == "workspace":
+        yield SSEEvent(event="status", data={"phase": "workspace", "message": status.query})
+    elif status.kind == "action" and status.action is not None:
+        yield SSEEvent(event="action_proposed", data=status.action.to_dict())
 
 
 def _agent_structured_answer(result: AgentResult) -> StructuredAnswer:
@@ -874,9 +914,11 @@ def _agent_structured_answer(result: AgentResult) -> StructuredAnswer:
         note = (
             "Not found in the Legalite library — answered from general knowledge. "
             "Verify against the current law before relying on it."
-            if result.tool_calls
+            if any(tc.name == "search_legal_library" for tc in result.tool_calls)
             else ""
         )
+    elif result.mode == "workspace":
+        note = "Based on your Legalite workspace."
     elif result.mode == "grounded":
         n = len(result.cited_ids)
         note = f"Grounded in {n} passage{'s' if n != 1 else ''} from the Legalite library."
