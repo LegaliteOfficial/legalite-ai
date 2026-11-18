@@ -125,7 +125,7 @@ class Settings(BaseSettings):
     # model as agent_llm_model.
     agent_fast_llm_model: str | None = None
     agent_temperature: float = 0.3
-    agent_max_output_tokens: int = 2000
+    agent_max_output_tokens: int = 3000
     # Upper bound on tool-calling rounds per turn (each round = one LLM
     # call). Bounds latency + cost on runaway tool loops.
     agent_max_tool_rounds: int = 4
@@ -133,6 +133,13 @@ class Settings(BaseSettings):
     # how much of each passage's text is shown to the model.
     agent_search_top_k: int = 6
     agent_passage_max_chars: int = 1800
+    # Research mode: long fact patterns, multi-issue problems and requests
+    # for an opinion or memo (see chat_agent.is_research_question) get more
+    # searches, more and longer passages, and room for a full answer.
+    agent_research_max_output_tokens: int = 7000
+    agent_research_max_tool_rounds: int = 7
+    agent_research_search_top_k: int = 8
+    agent_research_passage_max_chars: int = 3000
     # Conversation memory fed to the agent as real chat turns.
     agent_memory_window_turns: int = 20
     agent_memory_max_tokens: int = 12000

@@ -74,7 +74,9 @@ class _FakeChunker:
     detection logic is tested separately in test_legal_chunker.py; this
     fake isolates the ingestion-service wiring bug from chunker internals."""
 
-    def chunk(self, parsed: ParsedPdf, doc_title: str | None = None) -> list[LegalChunk]:
+    def chunk(
+        self, parsed: ParsedPdf, doc_title: str | None = None, *, doc_type: str | None = None
+    ) -> list[LegalChunk]:
         return [
             LegalChunk(
                 content="Body text.",
