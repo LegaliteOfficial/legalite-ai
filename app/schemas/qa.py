@@ -114,6 +114,11 @@ class StructuredAnswer(BaseModel):
     citations: list[int] = Field(default_factory=list)
 
 
+class HistoryTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., max_length=20000)
+
+
 class AskRequest(BaseModel):
     # min_length=1 so short chat turns ("hi", "ok") are accepted — the chat
     # agent answers those naturally. Whitespace-only input is rejected by
@@ -132,6 +137,11 @@ class AskRequest(BaseModel):
         max_length=60000,
         description="Optional on-screen context the assistant may use (treated as data).",
     )
+    # The client's local copy of this conversation (oldest first). Used
+    # ONLY when the server has no messages for ``session_id`` — e.g. a chat
+    # the server lost — to seed server memory so the assistant still
+    # remembers it. Ignored once the server holds the conversation.
+    history: list[HistoryTurn] | None = Field(default=None, max_length=60)
 
 
 AnswerMode = Literal["grounded", "general", "conversational", "workspace", "refused"]

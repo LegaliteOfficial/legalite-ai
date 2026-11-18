@@ -63,6 +63,7 @@ from app.api.dependencies.tenant import get_optional_tenant_context
 from app.core.config import get_settings
 from app.core.rate_limit import limiter
 from app.core.tenant_context import TenantContext
+from app.rag.prompt_builder import MemoryTurn
 from app.rag.streaming import to_async
 from app.schemas.qa import AskRequest, AskResponse
 from app.services.qa_service import QAService
@@ -108,6 +109,11 @@ async def ask(
             detail="question must not be empty",
         )
     user_token = _bearer_token(authorization)
+    client_history = (
+        [MemoryTurn(role=t.role, content=t.content) for t in payload.history if t.content.strip()]
+        if payload.history
+        else None
+    )
     if stream:
         events = service.ask_stream(
             payload.question,
@@ -115,6 +121,7 @@ async def ask(
             tenant=tenant,
             context=payload.context,
             user_token=user_token,
+            client_history=client_history,
         )
         return StreamingResponse(
             to_async(events),
@@ -131,6 +138,7 @@ async def ask(
             tenant=tenant,
             context=payload.context,
             user_token=user_token,
+            client_history=client_history,
         )
     except ValueError as exc:
         raise HTTPException(

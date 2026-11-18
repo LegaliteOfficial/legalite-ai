@@ -27,12 +27,19 @@ from pathlib import Path
 from typing import Any
 
 from app.core.tenant_context import TenantContext
-from app.rag.chat_agent import AgentResult, AgentStatus, ChatAgent, ChatTurn
+from app.core.config import get_settings
+from app.rag.chat_agent import AgentResult, AgentStatus, ChatAgent, ChatTurn, clean_history_text
+from app.rag.conversation_memory import ConversationSummarizer, build_memory_message
+from app.rag.legal_memory import LegalMemory
 from app.rag.query_planner import QueryPlanner
 from app.rag.retriever import RetrievedPassage
 from app.rag.workspace_tools import WorkspaceToolkit
 from app.services.qa_service import route_agent_turn
-from evaluation.agent_chat.fixtures import DownWorkspaceClient, FakeWorkspaceClient
+from evaluation.agent_chat.fixtures import (
+    DownWorkspaceClient,
+    FakeWorkspaceClient,
+    InMemoryChatRepo,
+)
 from evaluation.agent_chat.scenarios import S
 
 RESULTS = Path(__file__).parent / "results"
@@ -71,12 +78,35 @@ def _stub_search(query: str) -> list[RetrievedPassage]:
     return []
 
 
-def run_scenario(sc: dict[str, Any], agent: ChatAgent, search: Any) -> dict[str, Any]:
+def run_scenario(
+    sc: dict[str, Any], agent: ChatAgent, search: Any, summarizer: Any
+) -> dict[str, Any]:
+    """Run one conversation through the same memory path as production:
+    LegalMemory (in-memory repo) -> load_conversation (+ rolling summary)
+    -> build_memory_message -> agent."""
+    settings = get_settings()
     planner = QueryPlanner()
-    history: list[ChatTurn] = []
+    memory = LegalMemory(InMemoryChatRepo())  # type: ignore[arg-type]
+    sid = memory.get_or_create_session(None)
+    window = int(sc.get("window", settings.agent_memory_window_turns))
     turns_out: list[dict[str, Any]] = []
     signed_in = sc.get("signed_in", False)
     for user_msg in sc["turns"]:
+        conv = memory.load_conversation(
+            sid,
+            window_turns=window,
+            max_tokens=settings.agent_memory_max_tokens,
+            summarizer=summarizer,
+        )
+        memory_note = build_memory_message(conv)
+        history = [
+            ChatTurn(
+                role="assistant" if t.role == "assistant" else "user",
+                content=clean_history_text(t.content, settings.agent_memory_turn_max_chars),
+            )
+            for t in conv.recent
+        ]
+        memory.append_user(sid, user_msg)
         workspace = None
         if signed_in == "down":
             workspace = WorkspaceToolkit(DownWorkspaceClient())  # type: ignore[arg-type]
@@ -96,6 +126,7 @@ def run_scenario(sc: dict[str, Any], agent: ChatAgent, search: Any) -> dict[str,
                 force_search=force,
                 conversational=conversational,
                 workspace=workspace,
+                conversation_memory=memory_note,
             ):
                 if isinstance(item, AgentResult):
                     result = item
@@ -126,8 +157,7 @@ def run_scenario(sc: dict[str, Any], agent: ChatAgent, search: Any) -> dict[str,
                 "error": error,
             }
         )
-        history.append(ChatTurn(role="user", content=user_msg))
-        history.append(ChatTurn(role="assistant", content=answer))
+        memory.append_assistant(sid, answer or "(no answer)")
     failures = check(sc.get("checks", {}), turns_out[-1])
     return {"id": sc["id"], "cat": sc["cat"], "turns": turns_out, "failures": failures}
 
@@ -165,12 +195,15 @@ def main() -> int:
 
     scenarios = [s for s in S if not args.only or s["id"] in args.only or s["cat"] in args.only]
     agent = ChatAgent()
+    summarizer = ConversationSummarizer()
     search = _stub_search if args.no_library else _library_search()
 
     RESULTS.mkdir(exist_ok=True)
     out_path = RESULTS / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.jsonl"
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(lambda sc: run_scenario(sc, agent, search), scenarios))
+        results = list(
+            pool.map(lambda sc: run_scenario(sc, agent, search, summarizer), scenarios)
+        )
     with out_path.open("w") as fh:
         for r in results:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")

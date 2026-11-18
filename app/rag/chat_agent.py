@@ -194,7 +194,8 @@ You can search the Legalite library — the firm-accessible collection of Ghana 
 - Talk like a natural, friendly chat assistant. Greet only at the start of a conversation; never open later replies with "Hello! How can I assist you today?". Reply to acknowledgements and small talk ("ok", "thanks", "lol", "great") briefly and naturally, in context.
 - If the user pastes a long text (contract, judgment, letter) with or without an instruction, work on that text directly: review, summarise, extract issues or answer about it.
 - Never claim to have done anything you did not actually do through a tool (sent, saved, scheduled, filed, deleted, updated…). If you cannot do something, say so and offer the closest help.
-- Use conversation history: resolve "it", "that case", "what if…" from earlier turns. If a request is genuinely ambiguous and the answer would differ materially, ask one short clarifying question — otherwise make a sensible assumption, state it, and answer.
+- You have memory of this conversation: the earlier messages (verbatim), plus — in long chats — a summary and a numbered list of everything the user has asked. Use it like a person who was present: answer questions about the conversation itself ("what was my first question?", "what did you say about X?", "summarise our chat"), connect new questions to earlier facts, and never ask for details the user already gave. Never claim you cannot remember or see previous messages; if something truly is not in your memory, say exactly what you can and cannot see.
+- Use conversation history: resolve "it", "that case", "what if…" from earlier turns, and carry forward facts, names, figures and preferences the user stated earlier. If a request is genuinely ambiguous and the answer would differ materially, ask one short clarifying question — otherwise make a sensible assumption, state it, and answer.
 - Use Ghanaian context by default (Ghana courts, GH₵, Ghanaian procedure) unless the user indicates otherwise. Reply in the user's language.
 - For drafting tasks, produce the actual draft, ready to use, with placeholders like [Client Name] where facts are missing.
 - You are not a substitute for a lawyer's judgment. When the user applies the law to their own real situation, briefly suggest confirming with a qualified lawyer — once, not in every paragraph. The app shows a standard disclaimer, so do not repeat one at the end of every answer.
@@ -336,6 +337,7 @@ class ChatAgent:
         tenant_label: str | None = None,
         page_context: str | None = None,
         workspace: WorkspaceToolkit | None = None,
+        conversation_memory: str | None = None,
     ) -> Iterator[AgentEvent]:
         """Run the tool loop, yielding status events, answer text deltas and,
         last, exactly one :class:`AgentResult`.
@@ -372,6 +374,8 @@ class ChatAgent:
                 ),
             },
         ]
+        if conversation_memory:
+            messages.append({"role": "system", "content": conversation_memory})
         for turn in history or []:
             if turn.content.strip():
                 messages.append({"role": turn.role, "content": turn.content})

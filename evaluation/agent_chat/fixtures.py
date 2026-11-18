@@ -8,6 +8,8 @@ the evaluation runs so "this week" always has something in it.
 
 from __future__ import annotations
 
+import uuid
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -313,3 +315,70 @@ class DownWorkspaceClient(FakeWorkspaceClient):
     profile = cases = clients = case_detail = deadlines = tasks = documents = document = (
         overview
     ) = _fail  # type: ignore[assignment]
+
+
+# In-memory stand-in for ChatRepository (same as the unit tests use).
+@dataclass
+class _Msg:
+    session_id: uuid.UUID
+    role: str
+    content: str
+    created_at: datetime
+    metadata_json: dict[str, Any] | None = None
+    id: uuid.UUID = field(default_factory=uuid.uuid4)
+
+
+@dataclass
+class _Sess:
+    id: uuid.UUID
+    organization_id: uuid.UUID | None
+    metadata_json: dict[str, Any] | None = None
+
+
+class InMemoryChatRepo:
+    """Mirrors ChatRepository, tracking commits."""
+
+    def __init__(self) -> None:
+        self.sessions: dict[uuid.UUID, _Sess] = {}
+        self.msgs: list[_Msg] = []
+        self.commits = 0
+        self._clock = datetime.now(UTC)  # like the DB's now()
+
+    def create_session(self, title=None, *, organization_id=None, user_id=None):  # type: ignore[no-untyped-def]
+        s = _Sess(id=uuid.uuid4(), organization_id=organization_id)
+        self.sessions[s.id] = s
+        return s
+
+    def get_session(self, session_id, *, organization_id=None):  # type: ignore[no-untyped-def]
+        s = self.sessions.get(session_id)
+        return s if s and s.organization_id == organization_id else None
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def add_message(self, session_id, role, content, metadata=None, created_at=None):  # type: ignore[no-untyped-def]
+        self._clock += timedelta(seconds=1)
+        m = _Msg(session_id, role, content, created_at or self._clock, metadata)
+        self.msgs.append(m)
+        return m
+
+    def _ordered(self, sid: uuid.UUID) -> list[_Msg]:
+        return sorted((m for m in self.msgs if m.session_id == sid), key=lambda m: m.created_at)
+
+    def get_recent_messages(self, session_id, limit):  # type: ignore[no-untyped-def]
+        return self._ordered(session_id)[-limit:] if limit else []
+
+    def get_user_messages(self, session_id, limit):  # type: ignore[no-untyped-def]
+        return [m.content for m in self._ordered(session_id) if m.role == "user"][:limit]
+
+    def count_messages(self, session_id):  # type: ignore[no-untyped-def]
+        return len(self._ordered(session_id))
+
+    def get_messages_range(self, session_id, offset, limit):  # type: ignore[no-untyped-def]
+        return self._ordered(session_id)[offset : offset + limit]
+
+    def get_session_meta(self, session_id):  # type: ignore[no-untyped-def]
+        return dict(self.sessions[session_id].metadata_json or {})
+
+    def set_session_meta(self, session_id, meta):  # type: ignore[no-untyped-def]
+        self.sessions[session_id].metadata_json = meta

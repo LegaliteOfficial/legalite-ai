@@ -103,9 +103,9 @@ Also: `propose_event` (meetings/hearings), `propose_task_update` and
 ### Live evaluation harness
 
 `python -m evaluation.agent_chat.run [--no-library] [--only <id|category>]`
-drives ~65 conversations (small talk, vague requests, general knowledge, legal
+drives ~72 conversations (small talk, vague requests, general knowledge, legal
 research, workspace reads/writes/updates, ambiguity, unsupported actions,
-signed-out, backend down, prompt injection, multi-turn, long pastes) through the
+signed-out, backend down, prompt injection, multi-turn, conversation recall, long pastes) through the
 real model with production routing and a fake workspace
 (`evaluation/agent_chat/fixtures.py`), and checks tool use, proposals and
 forbidden phrasing (e.g. claiming "I've created/marked/sent"). Transcripts go to
@@ -117,6 +117,40 @@ Next steps worth doing: durable per-user memory ("prefers British spelling",
 context; a `propose_calendar_event` tool; update/complete actions (mark task
 done, reschedule deadline) using the same proposal pattern; and an eval set of
 workspace conversations.
+
+## Conversation memory (v6): the assistant remembers the whole chat
+
+Symptom fixed: "what is the first question I asked?" -> "I'm unable to recall
+previous interactions". Root cause: on the streaming `/ask` path FastAPI closes
+the request DB session (without committing) before the response body runs, so
+chat messages written during the stream were silently rolled back and every
+turn started with an empty history. `LegalMemory` now commits its own writes
+(`ChatRepository.commit()`).
+
+What the agent sees each turn (`QAService._run_agent`):
+
+1. **Recent turns verbatim**: last `AGENT_MEMORY_WINDOW_TURNS` turns within
+   `AGENT_MEMORY_MAX_TOKENS`, as normal chat history.
+2. **A memory system message** (`app/rag/conversation_memory.py`,
+   `build_memory_message`): how many earlier messages are not shown, a rolling
+   summary of them, and a numbered outline of *every* user message so far.
+   That gives exact recall ("what did I ask first?") and gist (facts, figures,
+   parties, decisions) at a bounded cost however long the chat runs.
+3. **Rolling summary**: `LegalMemory.load_conversation` folds messages that
+   have aged out of the window into `chat_sessions.metadata_json.summary`
+   (`ConversationSummarizer`, on `AGENT_FAST_LLM_MODEL` if set) in batches of
+   4, so it costs one small call every couple of turns, only in long chats. A
+   failed summary call is logged and the turn continues without it.
+4. **Client-history fallback**: the app sends the visible transcript
+   (`history`, capped at 40 turns / 6000 chars each) with every request. If the
+   server has no messages for that session (older chats lost to the bug, a DB
+   reset), it seeds the session from it once, in order; otherwise it is ignored.
+
+The prompt tells the agent it has this memory, never to claim it cannot
+remember, and to carry facts forward (amounts, names, dates) when reasoning.
+Live scenarios: `recall-*` and `infer-*` in `evaluation/agent_chat/scenarios.py`
+(`recall-long-chat` forces a 3-turn window to exercise the summary + outline).
+Tests: `tests/unit/test_conversation_memory.py`.
 
 ## Scaling the intelligence further — prioritised roadmap
 
@@ -143,9 +177,7 @@ Ordered by impact ÷ effort. Each item is independent.
 - Run on every prompt/model change in CI; ship nothing that regresses.
 
 ### 3. Long-conversation memory
-- Rolling **summary memory**: when a session exceeds the window, summarise the
-  older turns into a `chat_sessions.summary` column (one cheap LLM call, async)
-  and prepend it to history. Keeps context unbounded at fixed token cost.
+- Rolling summary memory: shipped (see "Conversation memory" above).
 - **User/firm memory**: durable facts ("practices land law in Kumasi", "prefers
   British spelling") extracted with consent and injected into the context message.
 
@@ -192,8 +224,8 @@ Ordered by impact ÷ effort. Each item is independent.
 | `AGENT_MAX_TOOL_ROUNDS` | 4 | bounds tool loops |
 | `AGENT_SEARCH_TOP_K` | 6 | passages per search |
 | `AGENT_PASSAGE_MAX_CHARS` | 1800 | passage text shown to the model |
-| `AGENT_MEMORY_WINDOW_TURNS` | 12 | history turns |
-| `AGENT_MEMORY_MAX_TOKENS` | 6000 | history budget |
+| `AGENT_MEMORY_WINDOW_TURNS` | 20 | verbatim history turns; older ones are summarised |
+| `AGENT_MEMORY_MAX_TOKENS` | 12000 | verbatim history budget |
 | `ASK_CONTEXT_MAX_CHARS` | 20000 | on-screen context cap |
 | `LEGALITE_BACKEND_GRAPHQL_URL` | unset | NestJS GraphQL endpoint; unset disables workspace tools |
 | `AGENT_WORKSPACE_TOOLS_ENABLED` | true | kill switch for workspace tools |

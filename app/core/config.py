@@ -134,8 +134,8 @@ class Settings(BaseSettings):
     agent_search_top_k: int = 6
     agent_passage_max_chars: int = 1800
     # Conversation memory fed to the agent as real chat turns.
-    agent_memory_window_turns: int = 12
-    agent_memory_max_tokens: int = 6000
+    agent_memory_window_turns: int = 20
+    agent_memory_max_tokens: int = 12000
     agent_memory_turn_max_chars: int = 2500
     # Optional on-screen context (e.g. the open document) sent alongside
     # a question. Hard cap so one request can't blow the context window.
