@@ -63,6 +63,12 @@ from app.core.telemetry import llm_latency, observe
 from app.rag.authority import TIER_LABEL, classify
 from app.rag.authority import annotate as annotate_authority
 from app.rag.retriever import RetrievedPassage
+from app.rag.workspace_tools import (
+    WORKSPACE_PROMPT,
+    WORKSPACE_TOOL_NAMES,
+    ProposedAction,
+    WorkspaceToolkit,
+)
 
 if TYPE_CHECKING:
     from openai import OpenAI
@@ -71,7 +77,7 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-AnswerMode = Literal["grounded", "general", "conversational"]
+AnswerMode = Literal["grounded", "general", "conversational", "workspace"]
 AgentConfidence = Literal["high", "medium", "low"]
 
 SEARCH_TOOL = "search_legal_library"
@@ -99,12 +105,15 @@ class AgentStatus:
       - ``searching`` — a library search is about to run (``query`` set)
       - ``sources``   — a search finished (``count`` + ``scopes`` set)
       - ``answering`` — the model has started writing the final answer
+      - ``workspace`` — a workspace tool ran (``query`` = progress line)
+      - ``action``    — the agent proposed a record (``action`` set)
     """
 
-    kind: Literal["searching", "sources", "answering"]
+    kind: Literal["searching", "sources", "answering", "workspace", "action"]
     query: str = ""
     count: int = 0
     scopes: dict[str, int] = field(default_factory=dict)
+    action: ProposedAction | None = None
 
 
 @dataclass(slots=True)
@@ -131,6 +140,7 @@ class AgentResult:
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
+    proposed_actions: list[ProposedAction] = field(default_factory=list)
 
     @property
     def cited_passages(self) -> list[RetrievedPassage]:
@@ -235,10 +245,13 @@ def build_context_message(
     tenant_label: str | None,
     page_context: str | None,
     now: datetime | None = None,
+    profile: str | None = None,
 ) -> str:
     """Per-request system context: date, who is asking, on-screen material."""
     now = now or datetime.now(UTC)
-    lines = [f"Current date: {now.strftime('%A, %d %B %Y')} (UTC)."]
+    lines = [f"Current date: {now.strftime('%A, %d %B %Y')} ({now.date().isoformat()}, UTC)."]
+    if profile:
+        lines.append(profile)
     if tenant_label:
         lines.append(
             f"The user is a member of a law firm on Legalite ({tenant_label}). "
@@ -306,6 +319,7 @@ class ChatAgent:
         conversational: bool = False,
         tenant_label: str | None = None,
         page_context: str | None = None,
+        workspace: WorkspaceToolkit | None = None,
     ) -> Iterator[AgentEvent]:
         """Run the tool loop, yielding status events, answer text deltas and,
         last, exactly one :class:`AgentResult`.
@@ -322,12 +336,26 @@ class ChatAgent:
         t0 = time.perf_counter()
         model = self._fast_model if conversational else self._model
 
+        tools = _TOOLS
+        system_prompt = AGENT_SYSTEM_PROMPT
+        profile: str | None = None
+        if workspace is not None:
+            tools = _TOOLS + WorkspaceToolkit.definitions()
+            system_prompt = AGENT_SYSTEM_PROMPT + WORKSPACE_PROMPT
+            profile = workspace.profile_context()
+        else:
+            profile = (
+                "The user is not signed in to their workspace in this chat, so you "
+                "cannot see or create their cases, deadlines, tasks or documents. "
+                "If they ask for that, say they need to be signed in."
+            )
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": AGENT_SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {
                 "role": "system",
                 "content": build_context_message(
-                    tenant_label=tenant_label, page_context=page_context
+                    tenant_label=tenant_label, page_context=page_context, profile=profile
                 ),
             },
         ]
@@ -339,11 +367,15 @@ class ChatAgent:
         passages: list[RetrievedPassage] = []
         seen_keys: dict[str, int] = {}
         tool_records: list[ToolCallRecord] = []
+        proposals: list[ProposedAction] = []
         tokens_in = tokens_out = 0
         answer_parts: list[str] = []
         announced_answering = False
         rounds = 0
         max_rounds = max(1, settings.agent_max_tool_rounds)
+        if workspace is not None:
+            # Case analysis chains lookups (case → document → law → proposal).
+            max_rounds = max(max_rounds, settings.agent_workspace_max_tool_rounds)
 
         while True:
             rounds += 1
@@ -363,7 +395,7 @@ class ChatAgent:
                 ),
             }
             if tools_allowed:
-                request["tools"] = _TOOLS
+                request["tools"] = tools
                 request["tool_choice"] = tool_choice
                 request["parallel_tool_calls"] = True
 
@@ -452,6 +484,15 @@ class ChatAgent:
                     )
                 elif c["name"] == LIBRARY_TOOL:
                     content = _render_inventory(inventory_fn)
+                elif workspace is not None and c["name"] in WORKSPACE_TOOL_NAMES:
+                    outcome = workspace.execute(c["name"], args)
+                    record.result_count = outcome.count
+                    if outcome.status:
+                        yield AgentStatus(kind="workspace", query=outcome.status)
+                    if outcome.proposal is not None:
+                        proposals.append(outcome.proposal)
+                        yield AgentStatus(kind="action", action=outcome.proposal)
+                    content = outcome.content
                 else:
                     content = f"Unknown tool '{c['name']}'. Answer without it."
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": content})
@@ -465,10 +506,14 @@ class ChatAgent:
             )
 
         mode: AnswerMode
+        used_library = any(r.name == SEARCH_TOOL for r in tool_records)
+        used_workspace = any(r.name not in (SEARCH_TOOL, LIBRARY_TOOL) for r in tool_records)
         if cited_ids:
             mode = "grounded"
         elif conversational and not tool_records:
             mode = "conversational"
+        elif used_workspace and not used_library:
+            mode = "workspace"
         else:
             mode = "general"
         confidence, score = _assess_confidence(mode, [passages[i - 1] for i in cited_ids])
@@ -486,6 +531,7 @@ class ChatAgent:
             tokens_in=tokens_in,
             tokens_out=tokens_out,
             latency_ms=int((time.perf_counter() - t0) * 1000),
+            proposed_actions=proposals,
         )
 
 
@@ -667,7 +713,7 @@ def validate_citation_markers(text: str, passage_count: int) -> tuple[str, list[
 def _assess_confidence(
     mode: AnswerMode, cited: list[RetrievedPassage]
 ) -> tuple[AgentConfidence, float]:
-    if mode == "conversational":
+    if mode in ("conversational", "workspace"):
         return "high", 1.0
     if mode == "general":
         # Not grounded in the library — never present as high confidence.

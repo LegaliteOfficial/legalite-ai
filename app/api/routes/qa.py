@@ -55,7 +55,7 @@ Event sequence:
 The non-streaming response shape (``AskResponse``) is unchanged.
 """
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 
 from app.api.dependencies.services import get_qa_service
@@ -90,6 +90,15 @@ async def ask(
     ),
     service: QAService = Depends(get_qa_service),
     tenant: TenantContext = Depends(get_optional_tenant_context),
+    authorization: str | None = Header(
+        default=None,
+        description=(
+            "Optional `Bearer <token>` of the signed-in Legalite user. When "
+            "present, the agent can read that user's cases, deadlines, tasks "
+            "and documents via the backend (which validates the token) and "
+            "propose new records. Never stored or logged."
+        ),
+    ),
 ):
     # NOTE: return-type union annotation removed so slowapi + FastAPI introspection
     # plays nicely with `from __future__ import annotations` not being available here.
@@ -98,12 +107,14 @@ async def ask(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="question must not be empty",
         )
+    user_token = _bearer_token(authorization)
     if stream:
         events = service.ask_stream(
             payload.question,
             session_id=payload.session_id,
             tenant=tenant,
             context=payload.context,
+            user_token=user_token,
         )
         return StreamingResponse(
             to_async(events),
@@ -119,6 +130,7 @@ async def ask(
             session_id=payload.session_id,
             tenant=tenant,
             context=payload.context,
+            user_token=user_token,
         )
     except ValueError as exc:
         raise HTTPException(
@@ -130,3 +142,14 @@ async def ask(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Q&A failed: {exc}",
         ) from exc
+
+
+def _bearer_token(header: str | None) -> str | None:
+    """Extract the token from ``Authorization: Bearer <token>``."""
+    if not header:
+        return None
+    scheme, _, token = header.partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not token or len(token) > 8192:
+        return None
+    return token

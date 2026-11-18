@@ -140,6 +140,20 @@ class Settings(BaseSettings):
     # Optional on-screen context (e.g. the open document) sent alongside
     # a question. Hard cap so one request can't blow the context window.
     ask_context_max_chars: int = 20000
+    # Workspace tools: let the agent read the signed-in user's cases,
+    # clients, deadlines, tasks and documents through the NestJS GraphQL
+    # API (using the user's own bearer token), and propose new records
+    # that the user confirms in the UI. Disabled when the URL is unset.
+    legalite_backend_graphql_url: str | None = None
+    agent_workspace_tools_enabled: bool = True
+    workspace_request_timeout_seconds: float = 10.0
+    # Tool rounds allowed when workspace tools are active (chains like
+    # get_case -> read_document -> search law -> propose need more).
+    agent_workspace_max_tool_rounds: int = 6
+    # Max records returned to the model by a single workspace list tool.
+    agent_workspace_max_items: int = 25
+    # Max characters of a stored document's text shown to the model.
+    agent_workspace_document_max_chars: int = 12000
 
     # Observability
     prometheus_enabled: bool = True
