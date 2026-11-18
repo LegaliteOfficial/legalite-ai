@@ -22,6 +22,10 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        # A variable set to an empty value (common in hosting dashboards,
+        # e.g. ASK_AGENT_ENABLED=) means "not set": use the default instead
+        # of failing to parse "" as a bool or int and refusing to start.
+        env_ignore_empty=True,
     )
 
     # --- Application -------------------------------------------------------
