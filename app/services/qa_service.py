@@ -376,15 +376,8 @@ class QAService:
                 scope_label = "tenant" if org_label else "anonymous"
                 record_tenant_request(org_label, "/ask")
 
-                conversational = (
-                    plan.intent in CONVERSATIONAL_INTENTS
-                    and plan.intent != QueryIntent.CONVERSATIONAL_UNCLEAR
-                    and page_context is None
-                )
-                force_search = (
-                    plan.intent in _FORCE_SEARCH_INTENTS
-                    and plan.confidence >= 0.5
-                    and bool(_LEGAL_SUBSTANCE_RE.search(question))
+                conversational, force_search = route_agent_turn(
+                    plan, question, page_context=page_context
                 )
                 logger.info(
                     "qa.agent.planned",
@@ -844,6 +837,28 @@ _FORCE_SEARCH_INTENTS: frozenset[QueryIntent] = frozenset(
 )
 
 _CASE_TIERS = frozenset({"public_case_law"})
+
+
+def route_agent_turn(
+    plan: QueryPlan, question: str, *, page_context: str | None
+) -> tuple[bool, bool]:
+    """Decide (conversational, force_search) for one agent turn.
+
+    ``conversational`` → fast model, no forced search. ``force_search`` →
+    the first round must call the library search. Kept pure so the live
+    evaluation harness routes turns exactly as production does.
+    """
+    conversational = (
+        plan.intent in CONVERSATIONAL_INTENTS
+        and plan.intent != QueryIntent.CONVERSATIONAL_UNCLEAR
+        and page_context is None
+    )
+    force_search = (
+        plan.intent in _FORCE_SEARCH_INTENTS
+        and plan.confidence >= 0.5
+        and bool(_LEGAL_SUBSTANCE_RE.search(question))
+    )
+    return conversational, force_search
 
 
 def _status_events(status: AgentStatus) -> Iterator[SSEEvent]:

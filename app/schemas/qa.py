@@ -118,7 +118,10 @@ class AskRequest(BaseModel):
     # min_length=1 so short chat turns ("hi", "ok") are accepted — the chat
     # agent answers those naturally. Whitespace-only input is rejected by
     # the route.
-    question: str = Field(..., min_length=1, max_length=4000)
+    # Up to ~20k chars so users can paste a contract or judgment into the
+    # chat like any chat assistant; long text is clipped by the model's
+    # context budget, not rejected with a 422.
+    question: str = Field(..., min_length=1, max_length=20000)
     session_id: str | None = Field(default=None, description="Optional chat session UUID for memory")
     # Optional on-screen context (e.g. the document open in the editor).
     # Sent separately from ``question`` so retrieval and memory key off the

@@ -96,6 +96,22 @@ UI confirmation card ── user clicks Confirm ──► createCase / createDea
   workspace features. Workspace tools turn off when
   `LEGALITE_BACKEND_GRAPHQL_URL` is blank.
 
+Also: `propose_event` (meetings/hearings), `propose_task_update` and
+`propose_deadline_update` (mark done/missed, reschedule, reprioritise), at most
+5 proposals per reply, cases resolvable by id, case code, suit number or title.
+
+### Live evaluation harness
+
+`python -m evaluation.agent_chat.run [--no-library] [--only <id|category>]`
+drives ~65 conversations (small talk, vague requests, general knowledge, legal
+research, workspace reads/writes/updates, ambiguity, unsupported actions,
+signed-out, backend down, prompt injection, multi-turn, long pastes) through the
+real model with production routing and a fake workspace
+(`evaluation/agent_chat/fixtures.py`), and checks tool use, proposals and
+forbidden phrasing (e.g. claiming "I've created/marked/sent"). Transcripts go to
+`evaluation/agent_chat/results/` (git-ignored). Read them, don't just count
+passes. Costs real tokens.
+
 Next steps worth doing: durable per-user memory ("prefers British spelling",
 "usually acts for landlords") stored in this service and injected into the
 context; a `propose_calendar_event` tool; update/complete actions (mark task
