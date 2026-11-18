@@ -372,10 +372,18 @@ class _FakeMemory:
     def get_or_create_session(self, session_id, *, tenant=None):  # type: ignore[no-untyped-def]
         return self.sid
 
-    def load_history(self, sid, *, window_turns, max_tokens):  # type: ignore[no-untyped-def]
+    def load_conversation(self, sid, *, window_turns, max_tokens, summarizer=None):  # type: ignore[no-untyped-def]
+        from app.rag.legal_memory import ConversationMemory
         from app.rag.prompt_builder import MemoryTurn
 
-        return [MemoryTurn(role=r, content=c) for r, c, _ in self.messages]
+        return ConversationMemory(
+            recent=[MemoryTurn(role=r, content=c) for r, c, _ in self.messages],
+            user_messages=[c for r, c, _ in self.messages if r == "user"],
+        )
+
+    def import_history(self, sid, turns):  # type: ignore[no-untyped-def]
+        if not self.messages:
+            self.messages.extend((t.role, t.content, None) for t in turns)
 
     def append_user(self, sid, content):  # type: ignore[no-untyped-def]
         self.messages.append(("user", content, None))

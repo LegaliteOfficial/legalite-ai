@@ -18,15 +18,41 @@ Design choices:
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 from app.core.tenant_context import TenantContext
 from app.db.models.chat import ChatMessage
 from app.db.repositories.chat_repository import ChatRepository
 from app.rag.prompt_builder import MemoryTurn
 
 _CHARS_PER_TOKEN = 4  # rough estimator
+
+logger = get_logger(__name__)
+
+# (previous summary or None, newly aged-out turns) -> updated summary
+Summarizer = Callable[[str | None, list[MemoryTurn]], str]
+
+
+@dataclass(slots=True)
+class ConversationMemory:
+    """Everything the agent gets to remember about one conversation.
+
+    - ``recent``: the last turns, verbatim (window + token budget).
+    - ``summary``: rolling LLM summary of turns older than ``recent``.
+    - ``user_messages``: every user message so far, oldest first (capped),
+      so exact recall questions ("what did I ask first?") are answerable
+      however long the conversation gets.
+    - ``earlier_count``: messages not shown verbatim.
+    """
+
+    recent: list[MemoryTurn]
+    summary: str | None = None
+    user_messages: list[str] = field(default_factory=list)
+    earlier_count: int = 0
 
 
 @dataclass(slots=True)
@@ -65,12 +91,9 @@ class LegalMemory:
             if existing is not None:
                 return sid
             # session_id was bogus or belongs to a different tenant — start fresh.
-            return self._repo.create_session(
-                organization_id=org_id, user_id=user_id
-            ).id
-        return self._repo.create_session(
-            organization_id=org_id, user_id=user_id
-        ).id
+        new_id = self._repo.create_session(organization_id=org_id, user_id=user_id).id
+        self._repo.commit()
+        return new_id
 
     def load_recent(self, session_id: uuid.UUID) -> MemoryContext:
         settings = get_settings()
@@ -98,8 +121,76 @@ class LegalMemory:
         messages = self._repo.get_recent_messages(session_id, limit=window_turns * 2)
         return _truncate_to_budget([_to_turn(m) for m in messages], max_tokens=max_tokens)
 
+    def load_conversation(
+        self,
+        session_id: uuid.UUID,
+        *,
+        window_turns: int,
+        max_tokens: int,
+        summarizer: Summarizer | None = None,
+        summarize_batch: int = 4,
+        outline_limit: int = 100,
+    ) -> ConversationMemory:
+        """Recent turns verbatim + rolling summary + full user-message outline.
+
+        The summary is brought up to date lazily: once at least
+        ``summarize_batch`` messages have aged out of the verbatim window
+        since the last summary, they are folded into it (one cheap LLM
+        call) and the result is stored on the session's ``metadata_json``.
+        A failed summary never fails the turn.
+        """
+        total = self._repo.count_messages(session_id)
+        recent = _truncate_to_budget(
+            [
+                _to_turn(m)
+                for m in self._repo.get_recent_messages(session_id, limit=window_turns * 2)
+            ],
+            max_tokens=max_tokens,
+        )
+        earlier = max(0, total - len(recent))
+        meta = self._repo.get_session_meta(session_id) if earlier else {}
+        summary: str | None = meta.get("summary")
+        covered = int(meta.get("summary_covers") or 0)
+        if summarizer is not None and earlier - covered >= summarize_batch:
+            aged = self._repo.get_messages_range(session_id, covered, earlier - covered)
+            try:
+                summary = summarizer(summary, [_to_turn(m) for m in aged])
+                meta.update(summary=summary, summary_covers=earlier)
+                self._repo.set_session_meta(session_id, meta)
+                self._repo.commit()
+            except Exception:  # noqa: BLE001 — memory is best-effort
+                logger.exception("memory.summary_failed", session_id=str(session_id))
+        users = self._repo.get_user_messages(session_id, limit=outline_limit) if total else []
+        return ConversationMemory(
+            recent=recent, summary=summary, user_messages=users, earlier_count=earlier
+        )
+
+    def import_history(self, session_id: uuid.UUID, turns: list[MemoryTurn]) -> None:
+        """Seed an EMPTY server session with the client's local transcript.
+
+        Used when the browser has a conversation the server has no record
+        of (e.g. sessions lost before chat writes were committed), so the
+        assistant still remembers it and future turns build on it.
+        """
+        if not turns or self._repo.count_messages(session_id):
+            return
+        # Back-date well clear of "now" so imported turns sort before any new
+        # message even if the app and database clocks are skewed.
+        base = datetime.now(UTC) - timedelta(hours=1)
+        for i, t in enumerate(turns):
+            role = "assistant" if t.role == "assistant" else "user"
+            self._repo.add_message(
+                session_id,
+                role=role,
+                content=t.content,
+                metadata={"imported_from_client": True},
+                created_at=base + timedelta(seconds=i),
+            )
+        self._repo.commit()
+
     def append_user(self, session_id: uuid.UUID, content: str) -> None:
         self._repo.add_message(session_id, role="user", content=content)
+        self._repo.commit()
 
     def append_assistant(
         self,
@@ -117,6 +208,7 @@ class LegalMemory:
         msg = self._repo.add_message(
             session_id, role="assistant", content=content, metadata=metadata
         )
+        self._repo.commit()
         return msg.id
 
 

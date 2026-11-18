@@ -11,8 +11,9 @@ will only match sessions also created anonymously.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models.chat import ChatMessage, ChatSession
@@ -62,6 +63,17 @@ class ChatRepository:
             return None
         return session
 
+    def commit(self) -> None:
+        """Make chat writes durable now.
+
+        Needed because /ask?stream=true writes inside the SSE generator,
+        which FastAPI runs AFTER the request-scoped ``get_db`` dependency
+        has already committed and closed. Without an explicit commit those
+        rows are rolled back when the connection returns to the pool — the
+        assistant then "forgets" every earlier turn.
+        """
+        self._db.commit()
+
     # ---- messages ----------------------------------------------------------
 
     def add_message(
@@ -70,6 +82,7 @@ class ChatRepository:
         role: str,
         content: str,
         metadata: dict | None = None,
+        created_at: datetime | None = None,
     ) -> ChatMessage:
         msg = ChatMessage(
             session_id=session_id,
@@ -77,13 +90,15 @@ class ChatRepository:
             content=content,
             metadata_json=metadata,
         )
+        if created_at is not None:
+            # Explicit timestamps keep order when several rows are written
+            # in one transaction (now() is the transaction start time).
+            msg.created_at = created_at
         self._db.add(msg)
         self._db.flush()
         return msg
 
-    def get_recent_messages(
-        self, session_id: uuid.UUID, limit: int
-    ) -> list[ChatMessage]:
+    def get_recent_messages(self, session_id: uuid.UUID, limit: int) -> list[ChatMessage]:
         """Return the most recent `limit` messages in chronological order.
 
         Callers MUST gate by ``get_session(session_id, organization_id=…)``
@@ -100,3 +115,44 @@ class ChatRepository:
         rows = list(self._db.scalars(stmt).all())
         rows.reverse()
         return rows
+
+    def get_user_messages(self, session_id: uuid.UUID, limit: int) -> list[str]:
+        """Every user message in the session, oldest first (capped)."""
+        stmt = (
+            select(ChatMessage.content)
+            .where(ChatMessage.session_id == session_id, ChatMessage.role == "user")
+            .order_by(ChatMessage.created_at)
+            .limit(limit)
+        )
+        return list(self._db.scalars(stmt).all())
+
+    def count_messages(self, session_id: uuid.UUID) -> int:
+        stmt = (
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
+        )
+        return int(self._db.scalar(stmt) or 0)
+
+    def get_messages_range(
+        self, session_id: uuid.UUID, offset: int, limit: int
+    ) -> list[ChatMessage]:
+        """Messages ``[offset, offset+limit)`` in chronological order."""
+        stmt = (
+            select(ChatMessage)
+            .where(ChatMessage.session_id == session_id)
+            .order_by(ChatMessage.created_at)
+            .offset(offset)
+            .limit(limit)
+        )
+        return list(self._db.scalars(stmt).all())
+
+    def get_session_meta(self, session_id: uuid.UUID) -> dict:  # type: ignore[type-arg]
+        session = self._db.get(ChatSession, session_id)
+        return dict(session.metadata_json or {}) if session else {}
+
+    def set_session_meta(self, session_id: uuid.UUID, meta: dict) -> None:  # type: ignore[type-arg]
+        session = self._db.get(ChatSession, session_id)
+        if session is not None:
+            session.metadata_json = meta
+            self._db.flush()

@@ -73,6 +73,9 @@ class _StubChatRepository:
     def get_recent_messages(self, *_args, **_kwargs):
         return []
 
+    def commit(self) -> None:
+        pass
+
 
 def _tenant(org: uuid.UUID, user: uuid.UUID) -> TenantContext:
     return TenantContext(organization_id=org, user_id=user, role=TenantRole.LAWYER)

@@ -47,11 +47,12 @@ from app.rag.chat_agent import (
     passage_header,
 )
 from app.rag.citation_formatter import format_citations, format_sources
+from app.rag.conversation_memory import ConversationSummarizer, build_memory_message
 from app.rag.conversational_responder import ConversationalResponder
 from app.rag.hybrid_retriever import HybridRetriever
-from app.rag.legal_memory import LegalMemory, MemoryContext
+from app.rag.legal_memory import LegalMemory, MemoryContext, Summarizer
 from app.rag.multi_document_reasoner import CrossDocResult, MultiDocumentReasoner
-from app.rag.prompt_builder import DISCLAIMER, REFUSAL_TEXT
+from app.rag.prompt_builder import DISCLAIMER, REFUSAL_TEXT, MemoryTurn
 from app.rag.query_planner import (
     _LEGAL_SUBSTANCE_RE,
     CONVERSATIONAL_INTENTS,
@@ -86,6 +87,7 @@ class QAService:
         agent: ChatAgent | None = None,
         use_agent: bool | None = None,
         workspace_factory: Callable[[str], WorkspaceToolkit] | None = None,
+        summarizer: Summarizer | None = None,
     ) -> None:
         from app.vector_store.qdrant_client import get_vector_store
 
@@ -115,10 +117,13 @@ class QAService:
         # Chat agent (Ask Legalite v4). ``use_agent=None`` follows the
         # ASK_AGENT_ENABLED setting (auto-on with a real OpenAI key). An
         # explicitly injected agent always wins — that's how tests opt in.
+        self._summarizer: Summarizer | None = summarizer
         if agent is not None:
             self._agent: ChatAgent | None = agent
         elif use_agent if use_agent is not None else get_settings().agent_enabled:
             self._agent = ChatAgent()
+            if self._summarizer is None:
+                self._summarizer = ConversationSummarizer()
         else:
             self._agent = None
         # Tests inject a factory; production builds a GraphQL-backed toolkit.
@@ -132,11 +137,17 @@ class QAService:
         tenant: TenantContext | None = None,
         context: str | None = None,
         user_token: str | None = None,
+        client_history: list[MemoryTurn] | None = None,
     ) -> AskResponse:
         if self._agent is not None:
             final: AskResponse | None = None
             for item in self._run_agent(
-                question, session_id, tenant=tenant, context=context, user_token=user_token
+                question,
+                session_id,
+                tenant=tenant,
+                context=context,
+                user_token=user_token,
+                client_history=client_history,
             ):
                 if isinstance(item, AskResponse):
                     final = item
@@ -176,6 +187,7 @@ class QAService:
         tenant: TenantContext | None = None,
         context: str | None = None,
         user_token: str | None = None,
+        client_history: list[MemoryTurn] | None = None,
     ) -> Iterator[SSEEvent]:
         """SSE event stream that runs the real pipeline live rather than
         replaying a finished :meth:`ask` response.
@@ -200,7 +212,12 @@ class QAService:
         """
         if self._agent is not None:
             for item in self._run_agent(
-                question, session_id, tenant=tenant, context=context, user_token=user_token
+                question,
+                session_id,
+                tenant=tenant,
+                context=context,
+                user_token=user_token,
+                client_history=client_history,
             ):
                 if isinstance(item, SSEEvent):
                     yield item
@@ -324,6 +341,7 @@ class QAService:
         tenant: TenantContext | None,
         context: str | None,
         user_token: str | None = None,
+        client_history: list[MemoryTurn] | None = None,
     ) -> Iterator[SSEEvent | AskResponse]:
         """Run one chat turn through :class:`ChatAgent`.
 
@@ -355,18 +373,23 @@ class QAService:
             answered = False
             plan: QueryPlan | None = None
             try:
-                history_turns = self._memory.load_history(
+                if client_history:
+                    # No-op unless the server has no record of this chat.
+                    self._memory.import_history(sid, client_history)
+                conv = self._memory.load_conversation(
                     sid,
                     window_turns=settings.agent_memory_window_turns,
                     max_tokens=settings.agent_memory_max_tokens,
+                    summarizer=self._summarizer,
                 )
+                memory_note = build_memory_message(conv)
                 self._memory.append_user(sid, question)
                 history = [
                     ChatTurn(
                         role="assistant" if t.role == "assistant" else "user",
                         content=clean_history_text(t.content, settings.agent_memory_turn_max_chars),
                     )
-                    for t in history_turns
+                    for t in conv.recent
                 ]
 
                 plan = self._planner.plan(question, has_memory=bool(history))
@@ -407,6 +430,7 @@ class QAService:
                         tenant_label=f"role: {tenant.role.value}" if org_label and tenant else None,
                         page_context=page_context,
                         workspace=workspace,
+                        conversation_memory=memory_note,
                     ):
                         if isinstance(item, AgentResult):
                             result = item
