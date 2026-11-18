@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.services.case_intelligence_service import CaseIntelligenceService
+from app.services.drafting_service import DraftingService, HybridAuthorityRetriever
 from app.services.ingestion_service import IngestionService
 from app.services.qa_service import QAService
 
@@ -27,3 +28,9 @@ def get_case_intelligence_service(
     db: Session = Depends(get_db),
 ) -> CaseIntelligenceService:
     return CaseIntelligenceService(db)
+
+
+def get_drafting_service(db: Session = Depends(get_db)) -> DraftingService:
+    # The retriever is built lazily: requests with use_authorities=false,
+    # and every unit test, never touch the vector store.
+    return DraftingService(retriever_factory=lambda: HybridAuthorityRetriever(db))
