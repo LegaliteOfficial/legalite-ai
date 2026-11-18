@@ -63,6 +63,7 @@ from app.core.telemetry import llm_latency, observe
 from app.rag.authority import TIER_LABEL, classify
 from app.rag.authority import annotate as annotate_authority
 from app.rag.retriever import RetrievedPassage
+from app.rag.workspace_consent import describe_calls
 from app.rag.workspace_tools import (
     WORKSPACE_PROMPT,
     WORKSPACE_TOOL_NAMES,
@@ -77,7 +78,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
-AnswerMode = Literal["grounded", "general", "conversational", "workspace"]
+PERMISSION_PROMPT = (
+    "To answer this I need to look at your Legalite workspace. "
+    "Review what I'd access below and choose whether to allow it."
+)
+
+AnswerMode = Literal["grounded", "general", "conversational", "workspace", "permission_required"]
 AgentConfidence = Literal["high", "medium", "low"]
 
 SEARCH_TOOL = "search_legal_library"
@@ -141,6 +147,11 @@ class AgentResult:
     tokens_out: int = 0
     latency_ms: int = 0
     proposed_actions: list[ProposedAction] = field(default_factory=list)
+    # mode == "permission_required": the turn stopped before its first
+    # workspace tool ran. ``permission_scopes`` says, in plain words, what
+    # the model was about to look at; ``permission_tools`` names the tools.
+    permission_scopes: list[str] = field(default_factory=list)
+    permission_tools: list[str] = field(default_factory=list)
 
     @property
     def cited_passages(self) -> list[RetrievedPassage]:
@@ -244,6 +255,27 @@ _TOOLS: list[dict[str, Any]] = [
 ]
 
 
+_ACCESS_NOTES = {
+    "ask": (
+        "Workspace access: the user is asked for permission before your first workspace tool runs on a "
+        "request; the app shows them a permission card. When the question needs their records, call the "
+        "tool you need as normal. Do not ask for permission in your reply and do not mention this mechanism."
+    ),
+    "denied": (
+        "Workspace access: the user declined access to their workspace for this request, so you cannot "
+        "see or change their cases, clients, deadlines, tasks, documents or invoices. Answer as well as "
+        "you can without them, say in one short sentence that you did not look at their records, and that "
+        "they can allow access if they want an answer from their own data. Do not guess at their records."
+    ),
+    "disabled": (
+        "Workspace access: the user has turned off the assistant's access to their workspace in "
+        "Settings > AI Assistant, so you cannot see or change their records. Answer as well as you can "
+        "without them; if the question needs their data, say so in one sentence and that they can turn "
+        "access back on in Settings > AI Assistant. Do not guess at their records."
+    ),
+}
+
+
 def build_context_message(
     *,
     tenant_label: str | None,
@@ -251,6 +283,7 @@ def build_context_message(
     now: datetime | None = None,
     profile: str | None = None,
     workspace_available: bool = False,
+    workspace_access: str | None = None,
 ) -> str:
     """Per-request system context: date, who is asking, on-screen material.
 
@@ -262,11 +295,18 @@ def build_context_message(
     """
     now = now or datetime.now(UTC)
     lines = [f"Current date: {now.strftime('%A, %d %B %Y')} ({now.date().isoformat()}, UTC)."]
-    if workspace_available:
+    access = workspace_access or ("granted" if workspace_available else "unavailable")
+    if access in ("denied", "disabled"):
+        if profile:
+            lines.append(profile)
+        lines.append(_ACCESS_NOTES[access])
+    elif workspace_available:
         lines.append(
             profile
             or "The user is signed in. Their workspace tools (cases, clients, deadlines, tasks, documents) are available."
         )
+        if access == "ask":
+            lines.append(_ACCESS_NOTES["ask"])
     else:
         lines.append(
             "The user is not signed in to their Legalite workspace in this chat, so the workspace tools "
@@ -337,6 +377,8 @@ class ChatAgent:
         tenant_label: str | None = None,
         page_context: str | None = None,
         workspace: WorkspaceToolkit | None = None,
+        workspace_access: str = "granted",
+        profile: str | None = None,
         conversation_memory: str | None = None,
     ) -> Iterator[AgentEvent]:
         """Run the tool loop, yielding status events, answer text deltas and,
@@ -347,6 +389,14 @@ class ChatAgent:
         never depends on the model remembering to search). ``conversational``
         lets the turn use the fast model and disables forced search.
 
+        ``workspace_access`` gates the workspace tools when ``workspace`` is
+        given: ``"granted"`` runs them; ``"ask"`` offers them to the model
+        but stops the turn before the first one runs and returns a
+        ``permission_required`` result listing what it wanted to read. Any
+        other value is only described to the model (pass ``workspace=None``
+        then). ``profile`` is the user's identity line when no toolkit is
+        bound (access declined or disabled).
+
         Raises on transport errors from the LLM; the caller decides how to
         surface them.
         """
@@ -356,7 +406,7 @@ class ChatAgent:
 
         tools = _TOOLS
         system_prompt = AGENT_SYSTEM_PROMPT
-        profile: str | None = None
+        gated = workspace is not None and workspace_access == "ask"
         if workspace is not None:
             tools = _TOOLS + WorkspaceToolkit.definitions()
             system_prompt = AGENT_SYSTEM_PROMPT + WORKSPACE_PROMPT
@@ -371,6 +421,7 @@ class ChatAgent:
                     page_context=page_context,
                     profile=profile,
                     workspace_available=workspace is not None,
+                    workspace_access=workspace_access if workspace is not None or workspace_access in ("denied", "disabled") else None,
                 ),
             },
         ]
@@ -456,6 +507,33 @@ class ChatAgent:
             # The model asked for tools: record the assistant turn, run each
             # call, feed results back, and loop.
             calls = [pending[i] for i in sorted(pending)]
+            if gated:
+                wanted = [
+                    (c["name"], _parse_args(c["arguments"]))
+                    for c in calls
+                    if c["name"] in WORKSPACE_TOOL_NAMES
+                ]
+                if wanted:
+                    # Pause before any workspace read. Nothing from this
+                    # round runs (not even a library search beside it):
+                    # the resent request replays the turn from the start.
+                    yield AgentResult(
+                        answer=PERMISSION_PROMPT,
+                        mode="permission_required",
+                        confidence="high",
+                        confidence_score=1.0,
+                        passages=[],
+                        cited_ids=[],
+                        tool_calls=[ToolCallRecord(name=n, arguments=a) for n, a in wanted],
+                        model=model,
+                        rounds=rounds,
+                        tokens_in=tokens_in,
+                        tokens_out=tokens_out,
+                        latency_ms=int((time.perf_counter() - t0) * 1000),
+                        permission_scopes=describe_calls(wanted),
+                        permission_tools=sorted({n for n, _ in wanted}),
+                    )
+                    return
             for i, c in enumerate(calls):
                 if not c["id"]:
                     c["id"] = f"call_{rounds}_{i}"

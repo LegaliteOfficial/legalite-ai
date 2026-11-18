@@ -12,9 +12,12 @@ Consequences of that design:
   forged or expired token is rejected by the backend, not by us.
 - This service never stores or logs the token; it lives only for the
   duration of one /ask request.
-- Every method here is a *read*. Writes (create case, save a draft, add a
-  deadline) are proposed by the agent and executed by the frontend after
-  the user confirms — see ``app/rag/workspace_tools.py``.
+- Every method here is a *read*. Writes (create or update a case, save a
+  draft, add a deadline) are proposed by the agent and executed by the
+  frontend after the user confirms — see ``app/rag/workspace_tools.py``.
+- Whether the agent may use these reads at all is the user's choice
+  (``workspace_access``), enforced before any of them run — see
+  ``app/rag/workspace_consent.py``.
 """
 
 from __future__ import annotations
@@ -97,6 +100,29 @@ query AgentClients {
   clients { id full_name client_code contact_type organization email phone status }
 }
 """
+
+_CLIENT_QUERY = """
+query AgentClient($id: ID!) {
+  client(id: $id) {
+    id full_name client_code contact_type organization job_title email phone
+    address status roles notes created_at
+  }
+}
+"""
+
+_CASE_TEAM_QUERY = """
+query AgentCaseTeam($caseId: ID!) {
+  caseAssignments(case_id: $caseId) { member_id name assignment_role professional_title }
+}
+"""
+
+_INVOICES_QUERY = """
+query AgentInvoices {
+  invoices { id client_id client_name amount_ghs status due_date description created_at }
+}
+"""
+
+_ACCESS_QUERY = "query AgentWorkspaceAccess { aiWorkspaceAccess { mode } }"
 
 _OVERVIEW_QUERY = """
 query AgentOverview {
@@ -197,6 +223,27 @@ class WorkspaceClient:
 
     def clients(self) -> list[dict[str, Any]]:
         return list(self.query(_CLIENTS_QUERY).get("clients") or [])
+
+    def client(self, client_id: str) -> dict[str, Any] | None:
+        return self.query(_CLIENT_QUERY, {"id": client_id}).get("client")
+
+    def case_team(self, case_id: str) -> list[dict[str, Any]]:
+        return list(self.query(_CASE_TEAM_QUERY, {"caseId": case_id}).get("caseAssignments") or [])
+
+    def invoices(self) -> list[dict[str, Any]]:
+        return list(self.query(_INVOICES_QUERY).get("invoices") or [])
+
+    def workspace_access(self) -> str:
+        """The user's standing preference: ``ask`` | ``always`` | ``never``.
+
+        Fails to ``ask`` (the safe default: the user is prompted) when the
+        backend is unreachable or predates the preference."""
+        try:
+            mode = (self.query(_ACCESS_QUERY).get("aiWorkspaceAccess") or {}).get("mode")
+        except WorkspaceError as exc:
+            logger.info("workspace.access_unavailable", reason=str(exc))
+            return "ask"
+        return mode if mode in ("ask", "always", "never") else "ask"
 
     def overview(self) -> dict[str, Any]:
         return self.query(_OVERVIEW_QUERY).get("dashboardStats") or {}

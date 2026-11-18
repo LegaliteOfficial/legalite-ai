@@ -65,6 +65,7 @@ from app.core.rate_limit import limiter
 from app.core.tenant_context import TenantContext
 from app.rag.prompt_builder import MemoryTurn
 from app.rag.streaming import to_async
+from app.rag.workspace_consent import ConsentDecision
 from app.schemas.qa import AskRequest, AskResponse
 from app.services.qa_service import QAService
 
@@ -114,6 +115,14 @@ async def ask(
         if payload.history
         else None
     )
+    consent = (
+        ConsentDecision(
+            decision=payload.workspace_consent.decision,
+            request_id=payload.workspace_consent.request_id,
+        )
+        if payload.workspace_consent
+        else None
+    )
     if stream:
         events = service.ask_stream(
             payload.question,
@@ -122,6 +131,7 @@ async def ask(
             context=payload.context,
             user_token=user_token,
             client_history=client_history,
+            workspace_consent=consent,
         )
         return StreamingResponse(
             to_async(events),
@@ -139,6 +149,7 @@ async def ask(
             context=payload.context,
             user_token=user_token,
             client_history=client_history,
+            workspace_consent=consent,
         )
     except ValueError as exc:
         raise HTTPException(

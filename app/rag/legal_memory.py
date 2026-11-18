@@ -188,6 +188,14 @@ class LegalMemory:
             )
         self._repo.commit()
 
+    def get_meta(self, session_id: uuid.UUID) -> dict:  # type: ignore[type-arg]
+        """The session's free-form metadata (summary, pending consent …)."""
+        return self._repo.get_session_meta(session_id)
+
+    def set_meta(self, session_id: uuid.UUID, meta: dict) -> None:  # type: ignore[type-arg]
+        self._repo.set_session_meta(session_id, meta)
+        self._repo.commit()
+
     def append_user(self, session_id: uuid.UUID, content: str) -> None:
         self._repo.add_message(session_id, role="user", content=content)
         self._repo.commit()
