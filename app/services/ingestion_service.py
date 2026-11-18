@@ -143,7 +143,7 @@ class IngestionService:
                     doc_type=doc_type,
                     source=classification.source,
                 )
-            chunks = self._chunker.chunk(parsed, doc_title=title)
+            chunks = self._chunker.chunk(parsed, doc_title=title, doc_type=doc_type)
             if not chunks:
                 self._repo.mark_document_status(
                     document_id, "failed", notes="No chunks produced from PDF"

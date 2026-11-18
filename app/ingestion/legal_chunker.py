@@ -15,10 +15,21 @@ Hierarchy detected:
     Title  →  Chapter  →  Part  →  Article  →  Section  →  Clause  →  Subsection
 
 Works for Constitution, Acts, Regulations, and (best-effort) Judgments.
+
+Numbered lines ("12. The Minister may…") are only taken as a new section
+when they fit the document's numbering (see :func:`plan_sections`):
+- in a judgment they are paragraph numbers, never statutory sections;
+- in the Constitution they are articles, not sections;
+- in an Act, the sections are the longest run of numbers that rises in
+  document order; a number off that run is a list item, a cross-reference
+  or a misread, and numbering inside the Schedules (which restarts at 1
+  near the end of the document) is not a section of the Act.
+A wrong section label is worse than none: the assistant cites it.
 """
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 
@@ -85,14 +96,23 @@ def _detect_doc_metadata(parsed: ParsedPdf, declared_title: str | None) -> dict[
 # ---------------------------------------------------------------------------
 
 # Order matters — first match wins per line.
+# A heading is "Part II", "PART II — LAND REGISTRATION", "Article 7",
+# "Section 12". A line that merely wraps into a reference ("article 36 of
+# the Constitution", "Part VIII of the Second Schedule") is body text: the
+# keyword must be capitalised and the number must not run on into a
+# lower-case word.
+_NOT_PROSE = r"(?![ \t]+[a-z])"
 _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("title", re.compile(r"^\s*TITLE\s+([IVXLC\d]+)\b.*$", re.IGNORECASE)),
-    ("chapter", re.compile(r"^\s*CHAPTER\s+([IVXLC\d]+)\b.*$", re.IGNORECASE)),
-    ("part", re.compile(r"^\s*PART\s+([IVXLC\d]+)\b.*$", re.IGNORECASE)),
-    ("article", re.compile(r"^\s*ARTICLE\s+(\d+[A-Z]?)\b.*$", re.IGNORECASE)),
-    ("section", re.compile(r"^\s*SECTION\s+(\d+[A-Z]?(?:\(\d+\))?)\b.*$", re.IGNORECASE)),
-    # Numeric section markers like "12." or "12(2)"
-    ("section", re.compile(r"^\s*(\d{1,3}[A-Z]?(?:\(\d+\))?)\.\s+")),
+    ("title", re.compile(r"^\s*TITLE\s+([IVXLC\d]+)\b" + _NOT_PROSE + r".*$")),
+    ("chapter", re.compile(r"^\s*(?:CHAPTER|Chapter)\s+([IVXLC\d]+)\b" + _NOT_PROSE + r".*$")),
+    ("part", re.compile(r"^\s*(?:PART|Part)\s+([IVXLC\d]+)\b" + _NOT_PROSE + r".*$")),
+    ("article", re.compile(r"^\s*(?:ARTICLE|Article)\s+(\d+[A-Z]?)\b" + _NOT_PROSE + r".*$")),
+    (
+        "section",
+        re.compile(r"^\s*(?:SECTION|Section)\s+(\d+[A-Z]?(?:\(\d+\))?)" + _NOT_PROSE + r".*$"),
+    ),
+    # Numbered provisions like "12." or "12(2)." (vetted by plan_sections)
+    ("numbered", re.compile(r"^\s*(\d{1,3}[A-Z]?(?:\(\d+\))?)\.\s+")),
     ("clause", re.compile(r"^\s*\(([a-z])\)\s+")),
     ("subsection", re.compile(r"^\s*\(([ivxlcdm]+)\)\s+", re.IGNORECASE)),
 ]
@@ -179,6 +199,170 @@ class _Cursor:
         self.page_end = None
 
 
+# A heading that starts the Schedules at the back of an Act: "SCHEDULE",
+# "FIRST SCHEDULE", "SCHEDULE 2". Upper case only, alone on the line.
+_SCHEDULE_RE = re.compile(r"^\s*(?:[A-Z]+\s+)?SCHEDULES?(?:\s+[0-9IVX]+)?\s*$")
+_LEADING_INT_RE = re.compile(r"^(\d{1,3})")
+
+_JUDGMENT_DOC_TYPES = frozenset({"case law", "case_law", "judgment", "ruling"})
+_CONSTITUTION_DOC_TYPES = frozenset({"constitution"})
+
+
+@dataclass(slots=True)
+class _Event:
+    """A numbered provision marker or a Schedule heading, in document order."""
+
+    kind: str  # "marker" | "schedule" | "article" (a heading in an enactment)
+    page: int
+    number: int | None = None
+
+
+def _leading_int(value: str) -> int | None:
+    m = _LEADING_INT_RE.match(value)
+    return int(m.group(1)) if m else None
+
+
+def _longest_non_decreasing(values: list[int]) -> set[int]:
+    """Indexes (into ``values``) of one longest non-decreasing subsequence."""
+    import bisect
+
+    tails: list[int] = []
+    tail_idx: list[int] = []
+    prev: list[int] = [-1] * len(values)
+    for i, v in enumerate(values):
+        pos = bisect.bisect_right(tails, v)
+        if pos == len(tails):
+            tails.append(v)
+            tail_idx.append(i)
+        else:
+            tails[pos] = v
+            tail_idx[pos] = i
+        prev[i] = tail_idx[pos - 1] if pos > 0 else -1
+    keep: set[int] = set()
+    i = tail_idx[-1] if tail_idx else -1
+    while i != -1:
+        keep.add(i)
+        i = prev[i]
+    return keep
+
+
+def plan_sections(events: list[_Event], total_pages: int) -> list[str]:
+    """Verdict per event: markers get ``accept`` | ``ignore`` | ``gap`` |
+    ``close``;
+    Schedule headings get ``close`` | ``ignore``.
+
+    Provisions run in order through an enactment, so the numbers that are
+    really provisions form the longest non-decreasing run. Anything off
+    that run (a cross-reference starting a line, a list item, a misread
+    number) is text. The front matter may restart the count once (the
+    Arrangement of Sections table, then the body); a restart or a Schedule
+    heading after the front matter ends the body.
+
+    Treaties and conventions number their paragraphs afresh inside each
+    explicit "Article" heading, so the run is fitted per article there.
+    Article headings themselves are always kept (verdict ``ignore``).
+
+    An off-run number inside a hole in the run (accepted 50, then 53) is
+    most likely a misread 51 or 52: the text after it belongs to a section
+    that cannot be named, so it gets ``gap`` (no section label) rather than
+    being filed under 50.
+    """
+    early = max(4, math.ceil(total_pages * 0.15))
+    verdicts = ["ignore"] * len(events)
+    markers = [i for i, e in enumerate(events) if e.kind == "marker" and e.number is not None]
+    if not markers:
+        return verdicts
+    # Body start: the last "1." (else "2.") in the front matter.
+    body_start = markers[0]
+    for want in (1, 2):
+        early_hits = [i for i in markers if events[i].number == want and events[i].page <= early]
+        if early_hits:
+            body_start = early_hits[-1]
+            break
+    # Body end: the first Schedule heading after the front matter.
+    body_end = len(events)
+    for i in range(body_start, len(events)):
+        e = events[i]
+        if e.kind == "schedule" and e.page > early:
+            body_end = i
+            verdicts[i] = "close"
+            break
+
+    def fit(idxs: list[int]) -> None:
+        keep = _longest_non_decreasing([events[i].number or 0 for i in idxs])
+        for k, i in enumerate(idxs):
+            if k in keep:
+                verdicts[i] = "accept"
+
+    fit([i for i in markers if i < body_start])
+    body = [i for i in markers if body_start <= i < body_end]
+    segment: list[int] = []
+    for i in range(body_start, body_end):
+        e = events[i]
+        if e.kind == "article" and e.page > early:
+            fit(segment)
+            segment = []
+        elif e.kind == "marker" and e.number is not None:
+            segment.append(i)
+    fit(segment)
+    prev: int | None = None
+    pending: list[int] = []
+    for i in body:
+        if verdicts[i] == "accept":
+            n = events[i].number or 0
+            if prev is not None and n > prev + 1:
+                for j in pending:
+                    verdicts[j] = "gap"
+            prev, pending = n, []
+        else:
+            pending.append(i)
+    # Numbering that restarts after the body (a Schedule without a
+    # heading the parser could read) also ends it.
+    accepted = [i for i in body if verdicts[i] == "accept"]
+    if accepted and body_end == len(events):
+        last = accepted[-1]
+        for i in body:
+            if i > last and (events[i].number or 0) <= 2 and events[i].page > early:
+                verdicts[i] = "close"
+                break
+    return verdicts
+
+
+# Titles that name a decided case: "Mensah v Owusu", "Republic vrs …",
+# or a neutral citation such as "2026 GHASC 59".
+_CASE_TITLE_RE = re.compile(
+    r"\b(?:v|vs|vrs|versus)\.?\s|\b(?:19|20)\d{2}\s+GHA[A-Z]{1,5}\s+\d+|\bIN RE\b|\bEX PARTE\b",
+    re.IGNORECASE,
+)
+# Titles that name an enactment. doc_type labels in the library are not
+# reliable (Acts have been filed as "Case Law"), so the title decides.
+_ENACTMENT_TITLE_RE = re.compile(
+    r"\b(?:act|acts|law|decree|regulations?|rules|instrument|ordinance|code|agreement|"
+    r"treaty|convention|constitution|bill)\b|gh-act-|\bL\.?I\.?\s*\d+",
+    re.IGNORECASE,
+)
+
+
+def _doc_mode(doc_type: str | None, law_type: object, title: str | None = None) -> str:
+    """``judgment`` | ``constitution`` | ``enactment``.
+
+    Dropping labels from a real Act would hide its sections, so a document
+    is treated as a judgment only when its title reads like a case, or it
+    is tagged as one and its title does not name an enactment."""
+    dt = (doc_type or "").strip().lower()
+    t = title or ""
+    if dt in _CONSTITUTION_DOC_TYPES or law_type == "constitution" and not dt:
+        return "constitution"
+    if t and _CASE_TITLE_RE.search(t):
+        return "judgment"
+    if t and _ENACTMENT_TITLE_RE.search(t):
+        is_constitution = re.search(r"\bconstitution\b", t, re.I) and "amendment" not in t.lower()
+        return "constitution" if is_constitution else "enactment"
+    if dt in _JUDGMENT_DOC_TYPES or (not dt and law_type == "case_law"):
+        return "judgment"
+    return "enactment"
+
+
 class LegalChunker:
     """Splits a parsed PDF into hierarchy-aware chunks with rich metadata."""
 
@@ -192,10 +376,23 @@ class LegalChunker:
         self._max_chunk_chars = max_chunk_chars or settings.rag_max_chunk_chars
         self._overlap_chars = chunk_overlap or settings.rag_chunk_overlap_chars
 
-    def chunk(self, parsed: ParsedPdf, doc_title: str | None = None) -> list[LegalChunk]:
+    def chunk(
+        self, parsed: ParsedPdf, doc_title: str | None = None, *, doc_type: str | None = None
+    ) -> list[LegalChunk]:
         doc_meta = _detect_doc_metadata(parsed, doc_title)
+        mode = _doc_mode(doc_type, doc_meta.get("law_type"), doc_title)
         cursor = _Cursor(title=doc_title)
         chunks: list[LegalChunk] = []
+
+        # Pass 1: decide which numbered lines are provisions.
+        events: list[_Event] = []
+        for page in parsed.pages:
+            for raw_line in page.text.splitlines():
+                ev = _event_for(raw_line.rstrip(), mode, page.page_number)
+                if ev is not None:
+                    events.append(ev)
+        verdicts = iter(plan_sections(events, len(parsed.pages)))
+        closed = False
 
         def flush() -> None:
             if cursor.buffer and "".join(cursor.buffer).strip():
@@ -206,6 +403,13 @@ class LegalChunker:
                     chunks.append(part)
             cursor.reset_buffer()
 
+        def end_body() -> None:
+            flush()
+            cursor.section = cursor.clause = cursor.subsection = None
+            if mode == "constitution":
+                cursor.article = None
+
+        # Pass 2: chunk, applying those verdicts in the same order.
         for page in parsed.pages:
             for raw_line in page.text.splitlines():
                 line = raw_line.rstrip()
@@ -214,6 +418,25 @@ class LegalChunker:
                     continue
 
                 level = _detect_level(line)
+                ev = _event_for(line, mode, page.page_number)
+                if ev is not None and ev.kind == "article":
+                    next(verdicts)
+                elif ev is not None:
+                    verdict = next(verdicts)
+                    if verdict == "close" and not closed:
+                        closed = True
+                        end_body()
+                    if verdict == "gap":
+                        flush()
+                        cursor.section = cursor.clause = cursor.subsection = None
+                        level = None
+                    elif verdict != "accept":
+                        level = None
+                    elif level is not None and level[0] == "numbered":
+                        level = ("article" if mode == "constitution" else "section", level[1])
+                elif level is not None:
+                    level = _vet_other(level, mode, closed)
+
                 if level is None:
                     if cursor.page_start is None:
                         cursor.page_start = page.page_number
@@ -222,7 +445,11 @@ class LegalChunker:
                     continue
 
                 flush()
-                _apply_marker(cursor, level, line)
+                if level[0] == "boundary":
+                    # Judgment paragraph: a chunk boundary, not a provision.
+                    cursor.article = cursor.section = cursor.clause = cursor.subsection = None
+                else:
+                    _apply_marker(cursor, level, line)
                 cursor.page_start = page.page_number
                 cursor.page_end = page.page_number
                 cursor.buffer.append(line)
@@ -231,6 +458,38 @@ class LegalChunker:
         emitted = [c for c in chunks if c.content]
         _attach_spans(emitted, parsed)
         return emitted
+
+
+def _event_for(line: str, mode: str, page: int) -> _Event | None:
+    """The planning event a line produces, if any. Used by both passes of
+    the chunker and by the stored-label repair, so they always agree."""
+    if mode == "judgment" or not line.strip():
+        return None
+    level = _detect_level(line)
+    if level is None:
+        return _Event("schedule", page) if _SCHEDULE_RE.match(line) else None
+    kind, value = level
+    provision = "article" if mode == "constitution" else "section"
+    if kind == "numbered" or kind == provision:
+        return _Event("marker", page, _leading_int(value))
+    if kind == "article":
+        return _Event("article", page)
+    return None
+
+
+def _vet_other(level: tuple[str, str], mode: str, closed: bool) -> tuple[str, str] | None:
+    """Markers that are not numbered provisions."""
+    kind, value = level
+    if mode == "judgment":
+        # Numbered paragraphs and quoted provisions keep chunk boundaries
+        # (and so accurate pages) but carry no labels.
+        if kind in ("numbered", "section", "article", "clause", "subsection"):
+            return ("boundary", value)
+        return level
+    if closed and kind in ("clause", "subsection"):
+        # Lettered items in a Schedule are not clauses of a section.
+        return None
+    return level
 
 
 def _attach_doc_meta(chunk: LegalChunk, meta: dict[str, object]) -> None:
