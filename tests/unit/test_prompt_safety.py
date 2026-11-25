@@ -69,9 +69,13 @@ def test_system_prompt_forbids_invention_and_cross_tenant_leakage() -> None:
     # Fabrication block.
     assert "NEVER fabricate" in SYSTEM_PROMPT
     # Cross-tenant block.
-    assert "another firm" in SYSTEM_PROMPT.lower() or "another organization" in SYSTEM_PROMPT.lower()
-    assert "tenant-private materials belonging to other organizations" in SYSTEM_PROMPT.lower() \
+    assert (
+        "another firm" in SYSTEM_PROMPT.lower() or "another organization" in SYSTEM_PROMPT.lower()
+    )
+    assert (
+        "tenant-private materials belonging to other organizations" in SYSTEM_PROMPT.lower()
         or "NEVER reveal, summarize, or hint" in SYSTEM_PROMPT
+    )
 
 
 def test_system_prompt_pins_the_exact_refusal_sentence() -> None:

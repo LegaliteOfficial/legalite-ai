@@ -62,13 +62,9 @@ async def get_session(
     sess = repo.get_session(session_id, organization_id=tenant.organization_id)
     if sess is None:
         # 404 (not 403) so cross-tenant probing can't enumerate session IDs.
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="session not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
     messages = repo.get_recent_messages(session_id, limit=200)
     return SessionDetail(
         session_id=session_id,
-        messages=[
-            MessageOut(id=m.id, role=m.role, content=m.content) for m in messages
-        ],
+        messages=[MessageOut(id=m.id, role=m.role, content=m.content) for m in messages],
     )

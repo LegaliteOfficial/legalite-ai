@@ -44,14 +44,32 @@ class Workspace(FakeWorkspace):
     def invoices(self) -> list[dict[str, Any]]:
         self._check("invoices")
         return [
-            {"id": "inv-1", "client_id": "cl-1", "client_name": "Kofi Mensah", "amount_ghs": 2500, "status": "Sent", "due_date": "2026-12-01"},
-            {"id": "inv-2", "client_id": "cl-2", "client_name": "Ama Asante", "amount_ghs": 900, "status": "Paid"},
+            {
+                "id": "inv-1",
+                "client_id": "cl-1",
+                "client_name": "Kofi Mensah",
+                "amount_ghs": 2500,
+                "status": "Sent",
+                "due_date": "2026-12-01",
+            },
+            {
+                "id": "inv-2",
+                "client_id": "cl-2",
+                "client_name": "Ama Asante",
+                "amount_ghs": 900,
+                "status": "Paid",
+            },
         ]
 
     def documents(self, **kw: Any) -> list[dict[str, Any]]:
         self._check("documents")
         return [
-            {"id": "doc-9", "title": "Statement of claim", "case_id": "case-1", "case_title": "Mensah v Owusu (land boundary)"},
+            {
+                "id": "doc-9",
+                "title": "Statement of claim",
+                "case_id": "case-1",
+                "case_title": "Mensah v Owusu (land boundary)",
+            },
             {"id": "doc-10", "title": "Site plan", "case_id": None},
         ]
 
@@ -69,7 +87,13 @@ def _data_calls(ws: Workspace) -> list[str]:
 
 
 def test_new_tools_are_registered() -> None:
-    assert {"get_client", "list_invoices", "propose_case_update", "propose_client_update", "propose_link_documents"} <= WORKSPACE_TOOL_NAMES
+    assert {
+        "get_client",
+        "list_invoices",
+        "propose_case_update",
+        "propose_client_update",
+        "propose_link_documents",
+    } <= WORKSPACE_TOOL_NAMES
 
 
 def test_get_case_names_client_team_and_documents() -> None:
@@ -96,31 +120,55 @@ def test_list_invoices_filters_and_totals() -> None:
 
 def test_close_case_proposal_has_diff_and_never_writes() -> None:
     kit, ws = _kit()
-    outcome = kit.execute("propose_case_update", {"case_id": "Mensah v Owusu (land boundary)", "status": "closed"})
+    outcome = kit.execute(
+        "propose_case_update", {"case_id": "Mensah v Owusu (land boundary)", "status": "closed"}
+    )
     action = outcome.proposal
     assert action is not None and action.type == "update_case"
     assert action.summary == "Close case “Mensah v Owusu (land boundary)”"
     assert action.payload == {"id": "case-1", "input": {"status": "Closed"}}
-    assert action.changes == [{"field": "status", "label": "Status", "from": "Open", "to": "Closed"}]
+    assert action.changes == [
+        {"field": "status", "label": "Status", "from": "Open", "to": "Closed"}
+    ]
     assert action.to_dict()["changes"]
     assert all(not c.startswith(("update", "create")) for c in ws.calls)
 
 
 def test_case_update_skips_unchanged_and_rejects_no_op() -> None:
     kit, _ = _kit()
-    out = kit.execute("propose_case_update", {"case_id": "case-1", "status": "Open", "court": "High Court, Kumasi"})
+    out = kit.execute(
+        "propose_case_update",
+        {"case_id": "case-1", "status": "Open", "court": "High Court, Kumasi"},
+    )
     assert out.proposal is None and "nothing would change" in out.content
-    moved = kit.execute("propose_case_update", {"case_id": "case-1", "court": "Court of Appeal", "next_court_date": "2026-12-03", "client_id": "Ama Asante"}).proposal
+    moved = kit.execute(
+        "propose_case_update",
+        {
+            "case_id": "case-1",
+            "court": "Court of Appeal",
+            "next_court_date": "2026-12-03",
+            "client_id": "Ama Asante",
+        },
+    ).proposal
     assert moved is not None
-    assert moved.payload["input"] == {"court": "Court of Appeal", "next_court_date": "2026-12-03", "client_id": "cl-2"}
+    assert moved.payload["input"] == {
+        "court": "Court of Appeal",
+        "next_court_date": "2026-12-03",
+        "client_id": "cl-2",
+    }
     assert [c["label"] for c in moved.changes] == ["Court", "Next court date", "Client"]
 
 
 def test_client_update_and_link_documents() -> None:
     kit, _ = _kit()
-    upd = kit.execute("propose_client_update", {"client_id": "cl-1", "phone": "024 111 2222", "email": "kofi@example.com"}).proposal
+    upd = kit.execute(
+        "propose_client_update",
+        {"client_id": "cl-1", "phone": "024 111 2222", "email": "kofi@example.com"},
+    ).proposal
     assert upd is not None and upd.payload == {"id": "cl-1", "input": {"phone": "024 111 2222"}}
-    link = kit.execute("propose_link_documents", {"case_id": "case-1", "document_ids": ["doc-9", "doc-10"]}).proposal
+    link = kit.execute(
+        "propose_link_documents", {"case_id": "case-1", "document_ids": ["doc-9", "doc-10"]}
+    ).proposal
     assert link is not None and link.type == "link_documents"
     assert link.payload == {"case_id": "case-1", "document_ids": ["doc-10"]}
     assert link.changes[0]["from"] == "(no case)"
@@ -141,7 +189,13 @@ def test_agent_pauses_before_first_workspace_tool() -> None:
     kit, ws = _kit()
     client = _FakeClient([_call_round("find_cases", {"query": "Mensah"})])
     agent = ChatAgent(client=client, model="gpt-test")
-    _, result = _drain(agent, "which client is the Mensah case for?", search_fn=MagicMock(), workspace=kit, workspace_access="ask")
+    _, result = _drain(
+        agent,
+        "which client is the Mensah case for?",
+        search_fn=MagicMock(),
+        workspace=kit,
+        workspace_access="ask",
+    )
     assert result.mode == "permission_required"
     assert result.permission_scopes == ["Search your cases for “Mensah”"]
     assert result.permission_tools == ["find_cases"]
@@ -179,24 +233,32 @@ def test_service_pauses_then_resumes_with_one_shot_consent() -> None:
     done = events[-1].data
     assert done["answer_mode"] == "permission_required"
     req = done["permission_request"]
-    assert req["scopes"] == ["Search your cases for “Mensah”"] and req["request_id"].startswith("wsc_")
+    assert req["scopes"] == ["Search your cases for “Mensah”"] and req["request_id"].startswith(
+        "wsc_"
+    )
     assert mem.messages == []  # nothing remembered for a paused turn
     assert _data_calls(ws) == []
     sid = done["session_id"]
 
-    resp = svc.ask(Q, sid, user_token="tok", workspace_consent=ConsentDecision("allow", req["request_id"]))
+    resp = svc.ask(
+        Q, sid, user_token="tok", workspace_consent=ConsentDecision("allow", req["request_id"])
+    )
     assert resp.answer == "It is for Kofi Mensah."
     assert resp.workspace_access == "granted"
     assert "cases" in ws.calls
     assert [m[0] for m in mem.messages] == ["user", "assistant"]
 
     # The same request id cannot be replayed.
-    again = svc.ask(Q, sid, user_token="tok", workspace_consent=ConsentDecision("allow", req["request_id"]))
+    again = svc.ask(
+        Q, sid, user_token="tok", workspace_consent=ConsentDecision("allow", req["request_id"])
+    )
     assert again.answer_mode == "permission_required"
 
 
 def test_consent_is_bound_to_the_question() -> None:
-    svc, _, ws, _ = _svc([_call_round("find_cases", {"query": "Mensah"}), _call_round("list_invoices", {})])
+    svc, _, ws, _ = _svc(
+        [_call_round("find_cases", {"query": "Mensah"}), _call_round("list_invoices", {})]
+    )
     first = svc.ask(Q, user_token="tok")
     assert first.permission_request is not None
     other = svc.ask(
@@ -225,7 +287,11 @@ def test_deny_withholds_tools_and_explains() -> None:
     [("never", "disabled"), ("always", "granted")],
 )
 def test_standing_preference(access: str, expected: str) -> None:
-    rounds = [_text_round("ok")] if access == "never" else [_call_round("find_cases", {"query": "Mensah"}), _text_round("Kofi Mensah.")]
+    rounds = (
+        [_text_round("ok")]
+        if access == "never"
+        else [_call_round("find_cases", {"query": "Mensah"}), _text_round("Kofi Mensah.")]
+    )
     svc, _, ws, client = _svc(rounds, access=access)
     resp = svc.ask(Q, user_token="tok")
     assert resp.workspace_access == expected

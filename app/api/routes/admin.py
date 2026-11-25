@@ -41,7 +41,9 @@ _UPLOAD_LIMIT = get_settings().rate_limit_upload
 @limiter.limit(_UPLOAD_LIMIT)
 async def admin_upload_law(
     request: Request,
-    file: UploadFile = File(..., description="Ghana legal PDF (Constitution, Act, Regulation, Case)"),
+    file: UploadFile = File(
+        ..., description="Ghana legal PDF (Constitution, Act, Regulation, Case)"
+    ),
     title: str = Form(..., min_length=2, max_length=512),
     doc_type: str = Form(..., description="Constitution | Act | Regulation | Case Law | ..."),
     document_origin: DocumentOrigin | None = Form(

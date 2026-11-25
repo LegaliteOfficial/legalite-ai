@@ -203,9 +203,7 @@ def main() -> int:
     RESULTS.mkdir(exist_ok=True)
     out_path = RESULTS / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.jsonl"
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(
-            pool.map(lambda sc: run_scenario(sc, agent, search, summarizer), scenarios)
-        )
+        results = list(pool.map(lambda sc: run_scenario(sc, agent, search, summarizer), scenarios))
     with out_path.open("w") as fh:
         for r in results:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")

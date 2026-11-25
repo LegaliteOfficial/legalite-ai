@@ -23,9 +23,7 @@ if TYPE_CHECKING:
 class LegalChunk(Base, TimestampMixin):
     __tablename__ = "legal_chunks"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("legal_documents.id", ondelete="CASCADE"),

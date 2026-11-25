@@ -104,16 +104,12 @@ class CaseRepository:
         self._db.flush()
         return case
 
-    def attach_citations(
-        self, case_id: uuid.UUID, citations: Iterable[CaseCitationRecord]
-    ) -> None:
+    def attach_citations(self, case_id: uuid.UUID, citations: Iterable[CaseCitationRecord]) -> None:
         """Append citations to an existing case, ignoring duplicates (unique edge)."""
         existing = {
             row[0]
             for row in self._db.execute(
-                select(CaseCitation.cited_raw_text).where(
-                    CaseCitation.citing_case_id == case_id
-                )
+                select(CaseCitation.cited_raw_text).where(CaseCitation.citing_case_id == case_id)
             ).all()
         }
         rows = [
@@ -260,4 +256,3 @@ def _apply_tenant_filter(stmt, organization_id):  # type: ignore[no-untyped-def]
             & (LegalCase.organization_id == organization_id),
         )
     )
-

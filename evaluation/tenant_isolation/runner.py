@@ -180,9 +180,7 @@ def run(scenario: IsolationScenario | None = None) -> dict[str, object]:
 
     # 3. Firm A retains access to its own materials (positive control).
     a_passages = _retrieve_for(scenario, str(scenario.firm_a.organization_id))
-    a_markers_seen = sum(
-        1 for p in a_passages for m in firm_a_markers if m in (p.content or "")
-    )
+    a_markers_seen = sum(1 for p in a_passages for m in firm_a_markers if m in (p.content or ""))
 
     # 4. Prompt-level defense exists (rule presence check).
     prompt_ok = _check_prompt_safety(scenario, str(scenario.firm_b.organization_id))

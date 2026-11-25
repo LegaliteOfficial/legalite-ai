@@ -69,9 +69,7 @@ class MultiDocumentReasoner:
         # opt-out of rewriting can pass ``rewriter=None`` explicitly.
         self._rewriter = rewriter
 
-    def gather(
-        self, question: str, *, tenant: TenantContext | None = None
-    ) -> CrossDocResult:
+    def gather(self, question: str, *, tenant: TenantContext | None = None) -> CrossDocResult:
         settings = get_settings()
         per_bucket = max(2, settings.hybrid_topk_fused // max(1, len(self._buckets)))
 
@@ -134,9 +132,7 @@ class MultiDocumentReasoner:
         # Rerank the unified pool against the ORIGINAL question — the
         # variants were a recall tool, not the user's actual intent. The
         # cross-encoder should score relevance to what the user typed.
-        final = self._reranker.rerank(
-            question, deduped, top_n=settings.rag_topk_final
-        )
+        final = self._reranker.rerank(question, deduped, top_n=settings.rag_topk_final)
         logger.info(
             "multidoc.gathered",
             buckets=bucket_counts,

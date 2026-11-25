@@ -64,10 +64,10 @@ No prose outside the JSON. No markdown code fences.
 The passages are grouped by tier in the user message. You MUST treat the
 higher tiers as more authoritative when they conflict with lower tiers:
 
-  1. {TIER_LABEL['constitution']}
-  2. {TIER_LABEL['act']}
-  3. {TIER_LABEL['regulation']}
-  4. {TIER_LABEL['public_case_law']}
+  1. {TIER_LABEL["constitution"]}
+  2. {TIER_LABEL["act"]}
+  3. {TIER_LABEL["regulation"]}
+  4. {TIER_LABEL["public_case_law"]}
   5. Tenant-private materials (firm sample cases, memos, opinions, templates, strategy docs)
 
 Tenant-private materials may supplement reasoning but NEVER override

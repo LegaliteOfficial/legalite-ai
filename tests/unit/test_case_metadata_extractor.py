@@ -14,9 +14,7 @@ from app.ingestion.pdf_parser import ParsedPdf, PdfPage
 
 
 def _parsed(pages: list[str]) -> ParsedPdf:
-    return ParsedPdf(
-        pages=[PdfPage(page_number=i + 1, text=t) for i, t in enumerate(pages)]
-    )
+    return ParsedPdf(pages=[PdfPage(page_number=i + 1, text=t) for i, t in enumerate(pages)])
 
 
 def _extractor() -> CaseMetadataExtractor:

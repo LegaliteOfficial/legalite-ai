@@ -215,7 +215,7 @@ class Settings(BaseSettings):
     # safely live long enough to be cacheable. Tenant-private docs MUST
     # use a short TTL — if a URL leaks, the blast radius is bounded.
     storage_signed_url_ttl_global_seconds: int = 86400  # 24 hours
-    storage_signed_url_ttl_private_seconds: int = 300   # 5 minutes
+    storage_signed_url_ttl_private_seconds: int = 300  # 5 minutes
 
     # Service-to-service authentication (legalite-backend → legalite-ai).
     # When set, the gateway must sign tenant headers with HMAC-SHA256 and

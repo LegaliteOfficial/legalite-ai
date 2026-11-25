@@ -7,9 +7,7 @@ from app.ingestion.pdf_parser import ParsedPdf, PdfPage
 
 
 def _parsed(pages: list[str]) -> ParsedPdf:
-    return ParsedPdf(
-        pages=[PdfPage(page_number=i + 1, text=t) for i, t in enumerate(pages)]
-    )
+    return ParsedPdf(pages=[PdfPage(page_number=i + 1, text=t) for i, t in enumerate(pages)])
 
 
 def test_chunker_populates_offsets_for_act() -> None:
@@ -30,11 +28,7 @@ def test_chunker_populates_offsets_for_act() -> None:
 
 
 def test_offsets_are_within_page_text() -> None:
-    body = (
-        "CHAPTER 5\n"
-        "ARTICLE 14\n"
-        "Personal liberty content.\n"
-    )
+    body = "CHAPTER 5\nARTICLE 14\nPersonal liberty content.\n"
     parsed = _parsed([body])
     chunks = LegalChunker().chunk(parsed, doc_title="Constitution")
     page_len = len(parsed.pages[0].text)

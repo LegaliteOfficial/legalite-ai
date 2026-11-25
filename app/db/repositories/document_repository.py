@@ -120,9 +120,7 @@ class DocumentRepository:
         query = (
             select(LegalDocument)
             .where(LegalDocument.title.in_(title_list))
-            .where(
-                LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value
-            )
+            .where(LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value)
             .where(LegalDocument.status == "ingested")
         )
         if doc_type is not None:
@@ -133,9 +131,7 @@ class DocumentRepository:
         # valid skip targets so this is fine.
         return {doc.title: doc for doc in rows}
 
-    def set_remote_storage_key(
-        self, document_id: uuid.UUID, remote_storage_key: str
-    ) -> None:
+    def set_remote_storage_key(self, document_id: uuid.UUID, remote_storage_key: str) -> None:
         """Persist the Supabase Storage key for the original PDF.
 
         Called after a successful object-store upload during ingestion.
@@ -167,9 +163,7 @@ class DocumentRepository:
 
     # ---- chunks ------------------------------------------------------------
 
-    def add_chunks(
-        self, document_id: uuid.UUID, chunks: Iterable[ChunkRecord]
-    ) -> list[LegalChunk]:
+    def add_chunks(self, document_id: uuid.UUID, chunks: Iterable[ChunkRecord]) -> list[LegalChunk]:
         rows = [
             LegalChunk(
                 id=c.id,
@@ -279,8 +273,4 @@ class DocumentRepository:
             raise
         # Preserve score order
         chunk_by_id = {c.id: c for c in chunks}
-        return [
-            (chunk_by_id[cid], id_to_score[cid])
-            for cid in id_to_score
-            if cid in chunk_by_id
-        ]
+        return [(chunk_by_id[cid], id_to_score[cid]) for cid in id_to_score if cid in chunk_by_id]

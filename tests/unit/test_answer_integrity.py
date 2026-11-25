@@ -15,8 +15,17 @@ from app.rag.retriever import RetrievedPassage
 
 def _p(content: str, *, law: str = "Land Act 2020", section: str | None = None) -> RetrievedPassage:
     return RetrievedPassage(
-        score=1.0, content=content, law=law, article=None, section=section, chapter=None,
-        clause=None, subsection=None, page_start=1, page_end=1, vector_id=content[:12],
+        score=1.0,
+        content=content,
+        law=law,
+        article=None,
+        section=section,
+        chapter=None,
+        clause=None,
+        subsection=None,
+        page_start=1,
+        page_end=1,
+        vector_id=content[:12],
     )
 
 
@@ -38,7 +47,9 @@ def test_research_detection() -> None:
 
 def test_markers_renumbered_in_reading_order_with_passages() -> None:
     passages = [_p(f"passage {i}") for i in range(1, 25)]
-    text, cited = validate_citation_markers("Rule A [24]. Rule B [3][24]. Rule C [9].", len(passages))
+    text, cited = validate_citation_markers(
+        "Rule A [24]. Rule B [3][24]. Rule C [9].", len(passages)
+    )
     out, reordered, ids = renumber_citations(text, passages, cited)
     assert out == "Rule A [1]. Rule B [2][1]. Rule C [3]."
     assert ids == [1, 2, 3]
@@ -55,7 +66,10 @@ def test_markdown_links_are_not_renumbered() -> None:
 def test_unsupported_sections_and_cases_are_listed() -> None:
     passages = [
         _p("36. (1) A person shall not deal in land without registration.", section="36"),
-        _p("The Supreme Court in Brown v Quarshie held that possession matters.", law="Brown v Quarshie"),
+        _p(
+            "The Supreme Court in Brown v Quarshie held that possession matters.",
+            law="Brown v Quarshie",
+        ),
     ]
     answer = (
         "Under section 36 [1] registration is required. Section 99 gives priority to the first "
@@ -70,7 +84,9 @@ def test_unsupported_sections_and_cases_are_listed() -> None:
 
 def test_references_from_the_question_are_not_flagged() -> None:
     q = "Is Mensah v Boateng still good law on section 12?"
-    flagged = unsupported_references("Mensah v Boateng applied section 12.", [_p("unrelated text")], q)
+    flagged = unsupported_references(
+        "Mensah v Boateng applied section 12.", [_p("unrelated text")], q
+    )
     assert flagged == []
 
 

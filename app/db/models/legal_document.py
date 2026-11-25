@@ -19,9 +19,7 @@ if TYPE_CHECKING:
 class LegalDocument(Base, TimestampMixin):
     __tablename__ = "legal_documents"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     title: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     # e.g. "Constitution", "Act", "Regulation", "Case Law"
     doc_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -54,15 +52,11 @@ class LegalDocument(Base, TimestampMixin):
     visibility_scope: Mapped[str] = mapped_column(
         String(32), nullable=False, default=VisibilityScope.GLOBAL.value, index=True
     )
-    document_origin: Mapped[str | None] = mapped_column(
-        String(64), nullable=True, index=True
-    )
+    document_origin: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     confidentiality_level: Mapped[str] = mapped_column(
         String(32), nullable=False, default=ConfidentialityLevel.PUBLIC.value
     )
-    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    uploaded_by_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     chunks: Mapped[list[LegalChunk]] = relationship(
         back_populates="document",

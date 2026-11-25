@@ -96,9 +96,7 @@ def _postgres_counts(db) -> dict[str, object]:
 
 
 def _chunk_vector_ids(db) -> list[str]:
-    rows = db.execute(
-        text("SELECT vector_id FROM legal_chunks WHERE vector_id IS NOT NULL")
-    ).all()
+    rows = db.execute(text("SELECT vector_id FROM legal_chunks WHERE vector_id IS NOT NULL")).all()
     return [r[0] for r in rows]
 
 

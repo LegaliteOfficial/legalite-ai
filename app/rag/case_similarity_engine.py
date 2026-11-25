@@ -84,9 +84,7 @@ class CaseSimilarityEngine:
         # into distinct cases. Cap at 4x to avoid pathological corpora.
         candidate_pool = max(k * 6, 30)
         qfilter = build_tenant_filter(organization_id=org_id)
-        hits = self._vector_store.search(
-            query_vec, top_k=candidate_pool, query_filter=qfilter
-        )
+        hits = self._vector_store.search(query_vec, top_k=candidate_pool, query_filter=qfilter)
 
         # Group chunk hits by document_id and take the max chunk score per doc.
         # That score becomes the "semantic_score" for the candidate case.
@@ -117,9 +115,7 @@ class CaseSimilarityEngine:
                 continue
             semantic = doc_to_score.get(str(case.document_id), 0.0)
             shared = _shared_topics(query_topics, case.legal_topics or [])
-            topic_norm = (
-                len(shared) / max(len(query_topics), 1) if query_topics else 0.0
-            )
+            topic_norm = len(shared) / max(len(query_topics), 1) if query_topics else 0.0
             score = _blend(
                 semantic_score=semantic,
                 topic_score=topic_norm,
@@ -239,15 +235,33 @@ def _build_query_from_case(case: LegalCase) -> str:
 # Duplicating the list (rather than importing) keeps this module lightweight
 # and free of side effects (the extractor module triggers config loading).
 _TOPIC_KEYWORDS: list[tuple[str, re.Pattern[str]]] = [
-    ("employment", re.compile(r"\b(employer|employee|dismissal|wages?|labou?r|maternity)\b", re.IGNORECASE)),
+    (
+        "employment",
+        re.compile(r"\b(employer|employee|dismissal|wages?|labou?r|maternity)\b", re.IGNORECASE),
+    ),
     ("landlord_tenant", re.compile(r"\b(landlord|tenant|tenancy|eviction|rent)\b", re.IGNORECASE)),
-    ("criminal", re.compile(r"\b(offen[cs]e|imprisonment|conviction|warrant|arrest|bail)\b", re.IGNORECASE)),
-    ("constitutional", re.compile(r"\b(fundamental\s+rights?|liberty|equality|due\s+process)\b", re.IGNORECASE)),
+    (
+        "criminal",
+        re.compile(r"\b(offen[cs]e|imprisonment|conviction|warrant|arrest|bail)\b", re.IGNORECASE),
+    ),
+    (
+        "constitutional",
+        re.compile(r"\b(fundamental\s+rights?|liberty|equality|due\s+process)\b", re.IGNORECASE),
+    ),
     ("family", re.compile(r"\b(marriage|divorce|custody|guardian|matrimonial)\b", re.IGNORECASE)),
-    ("contract", re.compile(r"\b(contract|breach|consideration|offer|acceptance)\b", re.IGNORECASE)),
-    ("property", re.compile(r"\b(conveyance|easement|deed|title|mortgage|land|trespass)\b", re.IGNORECASE)),
+    (
+        "contract",
+        re.compile(r"\b(contract|breach|consideration|offer|acceptance)\b", re.IGNORECASE),
+    ),
+    (
+        "property",
+        re.compile(r"\b(conveyance|easement|deed|title|mortgage|land|trespass)\b", re.IGNORECASE),
+    ),
     ("tort", re.compile(r"\b(negligence|nuisance|defamation|duty\s+of\s+care)\b", re.IGNORECASE)),
-    ("corporate", re.compile(r"\b(company|directors?|shareholders?|winding\s+up|corporate)\b", re.IGNORECASE)),
+    (
+        "corporate",
+        re.compile(r"\b(company|directors?|shareholders?|winding\s+up|corporate)\b", re.IGNORECASE),
+    ),
 ]
 
 

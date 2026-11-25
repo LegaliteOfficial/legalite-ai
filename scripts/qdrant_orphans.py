@@ -99,9 +99,7 @@ def main() -> int:
         "orphan_document_ids": len(orphan_doc_ids),
         "orphan_point_count": orphan_point_count,
         "valid_point_count": valid_point_count,
-        "orphan_ratio": (
-            orphan_point_count / total_points if total_points else 0.0
-        ),
+        "orphan_ratio": (orphan_point_count / total_points if total_points else 0.0),
     }
 
     if args.json:

@@ -46,9 +46,7 @@ def format_citations(passages: list[RetrievedPassage]) -> list[Citation]:
             best_by_key[key] = p
 
     ordered_keys = sorted(score_by_key, key=lambda k: score_by_key[k], reverse=True)
-    return [
-        _passage_to_citation(best_by_key[k], score_by_key[k]) for k in ordered_keys
-    ]
+    return [_passage_to_citation(best_by_key[k], score_by_key[k]) for k in ordered_keys]
 
 
 def format_sources(passages: list[RetrievedPassage]) -> list[SourceUsed]:

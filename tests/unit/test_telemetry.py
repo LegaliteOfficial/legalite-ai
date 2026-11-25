@@ -98,7 +98,7 @@ def test_record_ask_and_refusal_increment_counters() -> None:
     record_ask(scope="tenant", intent="statute_question", confidence="high")
     record_refusal(reason="planner")
     body = render_metrics()[0].decode("utf-8")
-    assert 'legalite_ask_total{' in body
+    assert "legalite_ask_total{" in body
     assert 'legalite_refusal_total{reason="planner"}' in body
 
 

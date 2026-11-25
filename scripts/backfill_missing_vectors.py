@@ -109,9 +109,11 @@ def main() -> int:
         by_doc.setdefault(r.doc_title or str(r.document_id), []).append(r)
     chars = sum(len(r.content or "") for r in missing)
 
-    print(f"{len(missing)} of {len(rows)} chunks have no point in '{store._collection}', "
-          f"in {len(by_doc)} documents (~{chars // 4:,} tokens to embed "
-          f"with {settings.openai_embedding_model})")
+    print(
+        f"{len(missing)} of {len(rows)} chunks have no point in '{store._collection}', "
+        f"in {len(by_doc)} documents (~{chars // 4:,} tokens to embed "
+        f"with {settings.openai_embedding_model})"
+    )
     for title, rs in sorted(by_doc.items(), key=lambda kv: -len(kv[1]))[:30]:
         print(f"  {len(rs):>6}  {title}")
     if not args.apply:

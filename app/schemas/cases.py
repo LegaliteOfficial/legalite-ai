@@ -80,9 +80,7 @@ class CaseSummarizeRequest(BaseModel):
 
 class CaseSummarizeResponse(BaseModel):
     case: CaseDetailOut
-    disclaimer: str = (
-        "This information is for educational purposes and not legal advice."
-    )
+    disclaimer: str = "This information is for educational purposes and not legal advice."
 
 
 # ---- /cases/compare ---------------------------------------------------------
@@ -101,9 +99,7 @@ class CaseCompareResponse(BaseModel):
     cases: list[CaseDetailOut]
     differences: list[CaseComparisonField]
     overlap: list[str]  # topics shared by ALL cases compared
-    disclaimer: str = (
-        "This information is for educational purposes and not legal advice."
-    )
+    disclaimer: str = "This information is for educational purposes and not legal advice."
 
 
 # ---- GET /cases listing -----------------------------------------------------

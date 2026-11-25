@@ -18,7 +18,9 @@ def _pages(*texts: str) -> ParsedPdf:
 
 def _act(total_pages: int = 30) -> ParsedPdf:
     pages = ["" for _ in range(total_pages)]
-    pages[0] = "ARRANGEMENT OF SECTIONS\n1. Short title\n2. Interpretation\n3. Registration\nSCHEDULE\n"
+    pages[0] = (
+        "ARRANGEMENT OF SECTIONS\n1. Short title\n2. Interpretation\n3. Registration\nSCHEDULE\n"
+    )
     pages[2] = (
         "1. Short title\nThis Act may be cited as the Land Act.\n"
         "2. Interpretation\nIn this Act, unless the context otherwise requires.\n"
@@ -111,12 +113,21 @@ def test_repair_matches_chunker_on_stored_chunks() -> None:
     chunks = LegalChunker().chunk(_act(), doc_title="Land Act, 2020", doc_type="Act")
     stored = [
         StoredChunk(
-            id=i, vector_id=None, page_start=c.page_start, start_char=i, content=c.content,
-            article=c.article, section=c.section, clause=c.clause, subsection=c.subsection,
+            id=i,
+            vector_id=None,
+            page_start=c.page_start,
+            start_char=i,
+            content=c.content,
+            article=c.article,
+            section=c.section,
+            clause=c.clause,
+            subsection=c.subsection,
         )
         for i, c in enumerate(chunks)
     ]
-    assert relabel(stored, doc_type="Act", law_type=None, total_pages=30, title="Land Act, 2020") == []
+    assert (
+        relabel(stored, doc_type="Act", law_type=None, total_pages=30, title="Land Act, 2020") == []
+    )
     # Old-style labels on Schedule items are cleared.
     late = next(s for s in stored if (s.page_start or 0) >= 28)
     late.section = "28"
@@ -132,7 +143,9 @@ def test_convention_paragraphs_restart_inside_each_article() -> None:
         "Article 31\nReservations\n1. A State Party may make reservations.\n2. A reservation shall not be incompatible.\n"
         "3. A reservation may be withdrawn.\n"
     )
-    chunks = LegalChunker().chunk(_pages(*pages), doc_title="Convention on Ending Violence", doc_type="Act")
+    chunks = LegalChunker().chunk(
+        _pages(*pages), doc_title="Convention on Ending Violence", doc_type="Act"
+    )
     got = [(c.article, c.section) for c in chunks if c.section]
     assert got == [("30", "1"), ("30", "2"), ("31", "1"), ("31", "2"), ("31", "3")]
 

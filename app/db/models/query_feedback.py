@@ -26,13 +26,9 @@ from app.db.base import Base, TimestampMixin
 
 class QueryFeedback(Base, TimestampMixin):
     __tablename__ = "query_feedback"
-    __table_args__ = (
-        CheckConstraint("thumbs IN ('up', 'down')", name="ck_query_feedback_thumbs"),
-    )
+    __table_args__ = (CheckConstraint("thumbs IN ('up', 'down')", name="ck_query_feedback_thumbs"),)
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # ``message_id`` is unique — re-posting feedback for the same turn
     # UPDATEs the existing row rather than appending duplicates. Cascade
     # delete keeps the table clean when a session is purged.
@@ -47,12 +43,8 @@ class QueryFeedback(Base, TimestampMixin):
         ForeignKey("chat_sessions.id", ondelete="CASCADE"),
         nullable=False,
     )
-    organization_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
-    user_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), nullable=True
-    )
+    organization_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
 
     thumbs: Mapped[str] = mapped_column(String(8), nullable=False)
     comment: Mapped[str | None] = mapped_column(Text, nullable=True)

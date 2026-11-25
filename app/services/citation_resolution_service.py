@@ -110,9 +110,7 @@ class CitationResolutionService:
         so the sweep stays predictable even on large corpora.
         """
         rows = self._db.scalars(
-            select(CaseCitation)
-            .where(CaseCitation.cited_case_id.is_(None))
-            .limit(limit)
+            select(CaseCitation).where(CaseCitation.cited_case_id.is_(None)).limit(limit)
         ).all()
         results = [self._resolve_one(c) for c in rows]
         self._db.flush()
@@ -158,7 +156,9 @@ class CitationResolutionService:
         if best_id is None:
             rep = _REPORTER_RE.search(raw)
             if rep:
-                normalized = f"[{rep.group('year')}] {rep.group('reporter').upper()} {rep.group('num')}"
+                normalized = (
+                    f"[{rep.group('year')}] {rep.group('reporter').upper()} {rep.group('num')}"
+                )
                 for c in eligible_cases:
                     if c.case_number and normalized.lower() in c.case_number.lower():
                         best_id = c.id
@@ -260,15 +260,11 @@ def _case_visible(case: LegalCase, org_id: uuid.UUID | None) -> bool:
     if case.visibility_scope == VisibilityScope.GLOBAL.value:
         return True
     return (
-        org_id is not None
-        and case.organization_id is not None
-        and case.organization_id == org_id
+        org_id is not None and case.organization_id is not None and case.organization_id == org_id
     )
 
 
-def _outgoing(
-    db: Session, case: LegalCase, org_id: uuid.UUID | None
-) -> list[GraphNode]:
+def _outgoing(db: Session, case: LegalCase, org_id: uuid.UUID | None) -> list[GraphNode]:
     rows = db.scalars(
         select(CaseCitation).where(
             CaseCitation.citing_case_id == case.id,
@@ -278,12 +274,8 @@ def _outgoing(
     return list(_to_nodes(db, (r.cited_case_id for r in rows), org_id, edges=rows, role="cited"))
 
 
-def _incoming(
-    db: Session, case: LegalCase, org_id: uuid.UUID | None
-) -> list[GraphNode]:
-    rows = db.scalars(
-        select(CaseCitation).where(CaseCitation.cited_case_id == case.id)
-    ).all()
+def _incoming(db: Session, case: LegalCase, org_id: uuid.UUID | None) -> list[GraphNode]:
+    rows = db.scalars(select(CaseCitation).where(CaseCitation.cited_case_id == case.id)).all()
     return list(_to_nodes(db, (r.citing_case_id for r in rows), org_id, edges=rows, role="citing"))
 
 

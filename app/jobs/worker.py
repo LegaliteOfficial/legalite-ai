@@ -93,7 +93,10 @@ async def ingest_pdf_task(
         # Idempotency — never re-ingest a completed job.
         if job.status == "completed":
             logger.info("worker.skip_completed", job_id=job_id_str)
-            return {"status": "already_completed", "document_id": str(job.document_id) if job.document_id else None}
+            return {
+                "status": "already_completed",
+                "document_id": str(job.document_id) if job.document_id else None,
+            }
 
         repo.mark_processing(job_id)
         ingestion_job_state.labels(state="processing").inc()
@@ -158,9 +161,7 @@ async def ingest_pdf_task(
                 fail_repo.mark_failed(job_id, error=str(exc))
                 fail_db.commit()
                 ingestion_job_state.labels(state="failed").inc()
-                logger.exception(
-                    "worker.giving_up", job_id=job_id_str, retries=attempts
-                )
+                logger.exception("worker.giving_up", job_id=job_id_str, retries=attempts)
                 return {"status": "failed", "error": str(exc)[:500]}
             ingestion_job_state.labels(state="retried").inc()
         finally:

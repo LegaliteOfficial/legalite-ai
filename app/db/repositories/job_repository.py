@@ -75,9 +75,7 @@ class JobRepository:
         query = (
             select(IngestionJob)
             .where(IngestionJob.title.in_(titles))
-            .where(
-                IngestionJob.visibility_scope == VisibilityScope.GLOBAL.value
-            )
+            .where(IngestionJob.visibility_scope == VisibilityScope.GLOBAL.value)
             .where(IngestionJob.status.in_(("queued", "processing")))
         )
         if doc_type is not None:
@@ -98,9 +96,7 @@ class JobRepository:
         """
         if not job_ids:
             return []
-        rows = self._db.execute(
-            select(IngestionJob).where(IngestionJob.id.in_(job_ids))
-        ).scalars()
+        rows = self._db.execute(select(IngestionJob).where(IngestionJob.id.in_(job_ids))).scalars()
         return list(rows)
 
     def count_chunks(self, document_id: uuid.UUID) -> int:
@@ -127,9 +123,7 @@ class JobRepository:
         job.started_at = datetime.now(UTC)
         self._db.flush()
 
-    def mark_completed(
-        self, job_id: uuid.UUID, *, document_id: uuid.UUID
-    ) -> None:
+    def mark_completed(self, job_id: uuid.UUID, *, document_id: uuid.UUID) -> None:
         job = self._db.get(IngestionJob, job_id)
         if job is None:
             return

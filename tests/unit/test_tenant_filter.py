@@ -15,11 +15,7 @@ from app.vector_store.qdrant_client import build_tenant_filter
 
 
 def _conditions_for_key(branch: qm.Filter, key: str) -> list[qm.FieldCondition]:
-    return [
-        c
-        for c in (branch.must or [])
-        if isinstance(c, qm.FieldCondition) and c.key == key
-    ]
+    return [c for c in (branch.must or []) if isinstance(c, qm.FieldCondition) and c.key == key]
 
 
 def test_anonymous_filter_pins_global_only() -> None:

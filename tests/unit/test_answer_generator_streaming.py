@@ -108,7 +108,9 @@ def _make_generator(payload: str) -> AnswerGenerator:
     return AnswerGenerator(client=_MockClient(payload))  # type: ignore[arg-type]
 
 
-def _run_stream(gen: AnswerGenerator, question: str, passages: list[RetrievedPassage]) -> tuple[str, GeneratedAnswer]:
+def _run_stream(
+    gen: AnswerGenerator, question: str, passages: list[RetrievedPassage]
+) -> tuple[str, GeneratedAnswer]:
     deltas: list[str] = []
     result: GeneratedAnswer | None = None
     for item in gen.generate_stream(question, passages):
@@ -145,9 +147,7 @@ _GOOD_JSON = json.dumps(
 
 def test_deltas_match_direct_answer_and_final_result_is_not_refused() -> None:
     gen = _make_generator(_GOOD_JSON)
-    streamed_text, result = _run_stream(
-        gen, "Can a landlord evict without notice?", [_passage()]
-    )
+    streamed_text, result = _run_stream(gen, "Can a landlord evict without notice?", [_passage()])
     assert streamed_text == "Yes, a landlord must give notice before eviction."
     assert not result.refused
     assert result.structured.direct_answer == streamed_text

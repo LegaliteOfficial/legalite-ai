@@ -55,8 +55,7 @@ async def get_jobs_bulk(
     ids: str = Query(
         ...,
         description=(
-            "Comma-separated list of job UUIDs. Up to "
-            f"{_BULK_STATUS_MAX_IDS} per request."
+            f"Comma-separated list of job UUIDs. Up to {_BULK_STATUS_MAX_IDS} per request."
         ),
     ),
     db: Session = Depends(get_db),
@@ -91,8 +90,7 @@ async def get_jobs_bulk(
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail=(
-                f"Requested {len(raw_ids)} ids; the per-request cap is "
-                f"{_BULK_STATUS_MAX_IDS}."
+                f"Requested {len(raw_ids)} ids; the per-request cap is {_BULK_STATUS_MAX_IDS}."
             ),
         )
 
@@ -141,9 +139,7 @@ async def get_job(
     return _status_payload(db, repo, job)
 
 
-def _status_payload(
-    db: Session, repo: JobRepository, job: IngestionJob
-) -> JobStatusResponse:
+def _status_payload(db: Session, repo: JobRepository, job: IngestionJob) -> JobStatusResponse:
     """Job row → response, plus what ingestion learned about the document.
 
     For auto-classified uploads the job row keeps the ``auto`` sentinel;

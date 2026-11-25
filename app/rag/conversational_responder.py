@@ -110,9 +110,9 @@ _META_VARIANTS: tuple[str, ...] = (
         "from the Constitution, Acts of Parliament, Regulations, and case "
         "law that have been indexed into my knowledge base, and I cite "
         "every passage I rely on. Ask me things like:\n\n"
-        "- \"What does the Constitution say about citizenship?\"\n"
-        "- \"Explain the Labour Act's rules on dismissal.\"\n"
-        "- \"Find cases similar to a tenancy dispute in Accra.\"\n\n"
+        '- "What does the Constitution say about citizenship?"\n'
+        '- "Explain the Labour Act\'s rules on dismissal."\n'
+        '- "Find cases similar to a tenancy dispute in Accra."\n\n'
         "I'm a research tool, not a substitute for a lawyer. What can I "
         "look into for you?"
     ),
@@ -124,13 +124,8 @@ _SMALL_TALK_VARIANTS: tuple[str, ...] = (
         "I'm doing well, thanks for asking! Ready to help with any Ghana "
         "legal question you have — what would you like to explore?"
     ),
-    (
-        "All good on my end! What Ghana legal topic can I help you with?"
-    ),
-    (
-        "Doing great, thank you! Let me know what legal question I can dig "
-        "into for you."
-    ),
+    ("All good on my end! What Ghana legal topic can I help you with?"),
+    ("Doing great, thank you! Let me know what legal question I can dig into for you."),
 )
 
 # UNCLEAR opener — gently acknowledges we didn't parse the input. The
@@ -203,9 +198,7 @@ class ConversationalResponder:
         # to display it persistently in the UI.
         structured = StructuredAnswer(
             direct_answer=body,
-            legal_reasoning=(
-                "Conversational turn — no Ghana legal materials retrieved."
-            ),
+            legal_reasoning=("Conversational turn — no Ghana legal materials retrieved."),
             confidence_assessment="Templated reply; not a legal claim.",
         )
         return ConversationalAnswer(
@@ -218,9 +211,7 @@ class ConversationalResponder:
 # ── Capability-aware UNCLEAR builder ─────────────────────────────────────
 
 
-def _build_unclear_response(
-    question: str, inventory: CorpusSnapshot | None
-) -> str:
+def _build_unclear_response(question: str, inventory: CorpusSnapshot | None) -> str:
     """Compose a capability-aware reply for an UNCLEAR intent.
 
     Structure:
@@ -309,9 +300,7 @@ _CONCEPT_QUESTIONS: dict[str, tuple[str, ...]] = {
         "Explain the Companies Act's rules on incorporation.",
         "What does the Rent Act provide on landlord obligations?",
     ),
-    "regulation": (
-        "What regulations govern business registration in Ghana?",
-    ),
+    "regulation": ("What regulations govern business registration in Ghana?",),
     "sample_case": (
         "What firm precedents discuss employment disputes?",
         "Find similar internal cases on contract enforcement.",
@@ -323,9 +312,7 @@ _CONCEPT_QUESTIONS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _format_seed_questions(
-    inventory: CorpusSnapshot, *, question_seed: str
-) -> str:
+def _format_seed_questions(inventory: CorpusSnapshot, *, question_seed: str) -> str:
     """Build 2–3 example questions the corpus can plausibly answer.
 
     Strategy:
@@ -413,9 +400,7 @@ def _has(counts: dict[str, int], *keys: str) -> bool:
     return False
 
 
-def _samples_for(
-    samples: dict[str, list[str]], keys: tuple[str, ...]
-) -> list[str]:
+def _samples_for(samples: dict[str, list[str]], keys: tuple[str, ...]) -> list[str]:
     """Flatten sample titles whose doc_type matches any key (case-insensitive)."""
     lc_keys = tuple(k.lower() for k in keys)
     out: list[str] = []

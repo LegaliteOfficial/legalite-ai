@@ -223,9 +223,7 @@ def token_subject(token: str | None) -> str:
 class ConsentStore(Protocol):
     def issue(self, sid: uuid.UUID, *, subject: str, question: str) -> tuple[str, int]: ...
 
-    def redeem(
-        self, sid: uuid.UUID, request_id: str, *, subject: str, question: str
-    ) -> bool: ...
+    def redeem(self, sid: uuid.UUID, request_id: str, *, subject: str, question: str) -> bool: ...
 
 
 class _MetaBackend(Protocol):
@@ -245,9 +243,7 @@ class SessionConsentStore:
         now = int(self._clock())
         raw = meta.get(_META_KEY) or {}
         return {
-            k: v
-            for k, v in raw.items()
-            if isinstance(v, dict) and int(v.get("exp") or 0) > now
+            k: v for k, v in raw.items() if isinstance(v, dict) and int(v.get("exp") or 0) > now
         }
 
     def issue(self, sid: uuid.UUID, *, subject: str, question: str) -> tuple[str, int]:
@@ -264,9 +260,7 @@ class SessionConsentStore:
         self._backend.set_meta(sid, meta)
         return request_id, exp
 
-    def redeem(
-        self, sid: uuid.UUID, request_id: str, *, subject: str, question: str
-    ) -> bool:
+    def redeem(self, sid: uuid.UUID, request_id: str, *, subject: str, question: str) -> bool:
         meta = self._backend.get_meta(sid)
         pending = self._pending(meta)
         entry = pending.pop(request_id, None)

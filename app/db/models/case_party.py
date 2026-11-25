@@ -18,9 +18,7 @@ if TYPE_CHECKING:
 class CaseParty(Base, TimestampMixin):
     __tablename__ = "case_parties"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     case_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("legal_cases.id", ondelete="CASCADE"),

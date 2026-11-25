@@ -62,8 +62,11 @@ def test_missing_signature_when_secret_set_rejects_tenant_request() -> None:
 def test_anonymous_request_does_not_need_signature() -> None:
     """Legacy /ask / /upload-law with no tenant headers must still work."""
     verify_gateway_signature(
-        timestamp=None, signature=None,
-        organization_id=None, user_id=None, role=None,
+        timestamp=None,
+        signature=None,
+        organization_id=None,
+        user_id=None,
+        role=None,
     )
 
 

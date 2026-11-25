@@ -77,9 +77,7 @@ class ConfidenceEngine:
             else settings.rag_citation_consistency_high_threshold
         )
 
-    def assess_before_generation(
-        self, passages: list[RetrievedPassage]
-    ) -> ConfidenceAssessment:
+    def assess_before_generation(self, passages: list[RetrievedPassage]) -> ConfidenceAssessment:
         """Pre-LLM gating.
 
         Phase A change: the pre-LLM bar is now very low. We only refuse
@@ -114,17 +112,17 @@ class ConfidenceEngine:
             None,
         )
         top_retrieval = top_cosine if top_cosine is not None else passages[0].score
-        top_rerank = next(
-            (p.rerank_score for p in passages if p.rerank_score is not None), None
-        )
+        top_rerank = next((p.rerank_score for p in passages if p.rerank_score is not None), None)
 
         # If we have rerank scores, trust them more. Otherwise rely on retrieval.
         primary = top_rerank if top_rerank is not None else top_retrieval
 
         # Catastrophic-noise refusal — below this we're below noise even
         # on modern text-embedding-3-small.
-        if top_cosine is not None and top_cosine < self._catastrophic_cosine and (
-            top_rerank is None or top_rerank < self._catastrophic_rerank
+        if (
+            top_cosine is not None
+            and top_cosine < self._catastrophic_cosine
+            and (top_rerank is None or top_rerank < self._catastrophic_rerank)
         ):
             return ConfidenceAssessment(
                 level="low",
@@ -214,10 +212,7 @@ class ConfidenceEngine:
             level=level,
             score=final_score,
             refused=False,
-            reason=(
-                f"final={final_score:.2f} consistency={consistency:.2f} "
-                f"grounded={grounded}"
-            ),
+            reason=(f"final={final_score:.2f} consistency={consistency:.2f} grounded={grounded}"),
         )
 
 

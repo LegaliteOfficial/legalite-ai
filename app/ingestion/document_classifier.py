@@ -124,10 +124,7 @@ class DocumentClassifier:
         if llm_enabled is None:
             llm_enabled = settings.doc_classifier_llm_enabled
         if llm_enabled is None:
-            llm_enabled = (
-                bool(settings.openai_api_key)
-                and settings.openai_api_key != "test-key"
-            )
+            llm_enabled = bool(settings.openai_api_key) and settings.openai_api_key != "test-key"
         self._llm_enabled = llm_enabled
         self._llm_client = llm_client
         self._llm_model = settings.openai_llm_model

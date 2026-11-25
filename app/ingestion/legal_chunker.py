@@ -40,9 +40,7 @@ from app.ingestion.pdf_parser import ParsedPdf
 # Document-level metadata detection
 # ---------------------------------------------------------------------------
 
-_ACT_NO_RE = re.compile(
-    r"\bAct(?:\s+No\.?)?\s*(\d{1,4})\b", re.IGNORECASE
-)
+_ACT_NO_RE = re.compile(r"\bAct(?:\s+No\.?)?\s*(\d{1,4})\b", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
 _REGULATION_RE = re.compile(r"\b(L\.?I\.?\s*\d+|Legislative\s+Instrument)\b", re.IGNORECASE)
 _CONSTITUTION_RE = re.compile(r"\bCONSTITUTION\s+OF\s+THE\s+REPUBLIC\s+OF\s+GHANA\b", re.IGNORECASE)
@@ -119,12 +117,24 @@ _PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 # Heuristic legal topic mapping based on keywords in the chunk content.
 _TOPIC_KEYWORDS: list[tuple[str, re.Pattern[str]]] = [
-    ("employment", re.compile(r"\b(employer|employee|dismissal|wages?|labou?r|maternity)\b", re.IGNORECASE)),
+    (
+        "employment",
+        re.compile(r"\b(employer|employee|dismissal|wages?|labou?r|maternity)\b", re.IGNORECASE),
+    ),
     ("landlord_tenant", re.compile(r"\b(landlord|tenant|tenancy|eviction|rent)\b", re.IGNORECASE)),
-    ("criminal", re.compile(r"\b(offen[cs]e|imprisonment|conviction|warrant|arrest|bail)\b", re.IGNORECASE)),
-    ("constitutional", re.compile(r"\b(fundamental\s+rights?|liberty|equality|due\s+process)\b", re.IGNORECASE)),
+    (
+        "criminal",
+        re.compile(r"\b(offen[cs]e|imprisonment|conviction|warrant|arrest|bail)\b", re.IGNORECASE),
+    ),
+    (
+        "constitutional",
+        re.compile(r"\b(fundamental\s+rights?|liberty|equality|due\s+process)\b", re.IGNORECASE),
+    ),
     ("family", re.compile(r"\b(marriage|divorce|custody|guardian|matrimonial)\b", re.IGNORECASE)),
-    ("contract", re.compile(r"\b(contract|breach|consideration|offer|acceptance)\b", re.IGNORECASE)),
+    (
+        "contract",
+        re.compile(r"\b(contract|breach|consideration|offer|acceptance)\b", re.IGNORECASE),
+    ),
     ("property", re.compile(r"\b(conveyance|easement|deed|title|mortgage|land)\b", re.IGNORECASE)),
 ]
 
@@ -541,9 +551,7 @@ def _attach_spans(chunks: list[LegalChunk], parsed: ParsedPdf) -> None:
             if idx >= 0:
                 chunk.end_char = idx + len(end_text)
             elif chunk.start_char is not None and chunk.page_end == chunk.page_start:
-                chunk.end_char = min(
-                    chunk.start_char + len(chunk.content), len(page_text)
-                )
+                chunk.end_char = min(chunk.start_char + len(chunk.content), len(page_text))
 
 
 def _leading_anchor(content: str, length: int = 40) -> str:

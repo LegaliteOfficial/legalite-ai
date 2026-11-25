@@ -102,9 +102,7 @@ class QueryRewriter:
         cache_size: int = 512,
     ) -> None:
         settings = get_settings()
-        self._enabled = (
-            enabled if enabled is not None else settings.query_rewriter_enabled
-        )
+        self._enabled = enabled if enabled is not None else settings.query_rewriter_enabled
         self._client = llm_client
         self._model = settings.openai_llm_model
         self._max_variants = max_variants

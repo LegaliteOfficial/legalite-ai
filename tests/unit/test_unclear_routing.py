@@ -21,9 +21,7 @@ from app.services.corpus_inventory import CorpusSnapshot
 
 
 def _plan(question: str, *, has_memory: bool = False):
-    return QueryPlanner(llm_fallback_enabled=False).plan(
-        question, has_memory=has_memory
-    )
+    return QueryPlanner(llm_fallback_enabled=False).plan(question, has_memory=has_memory)
 
 
 def test_typo_routes_to_unclear() -> None:
@@ -153,8 +151,6 @@ def test_responder_returns_high_confidence_for_unclear() -> None:
     # claims — they're "high" confidence by definition.
     responder = ConversationalResponder()
     snap = _snapshot(counts={"Constitution": 1961})
-    answer = responder.respond(
-        "Am i goo?", QueryIntent.CONVERSATIONAL_UNCLEAR, inventory=snap
-    )
+    answer = responder.respond("Am i goo?", QueryIntent.CONVERSATIONAL_UNCLEAR, inventory=snap)
     assert answer.confidence == "high"
     assert answer.intent == QueryIntent.CONVERSATIONAL_UNCLEAR

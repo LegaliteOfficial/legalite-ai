@@ -68,9 +68,7 @@ def _hit(doc_id: str, score: float, law_type: str = "case_law") -> VectorHit:
     )
 
 
-def _build_engine(
-    hits: list[VectorHit], cases: list[_FakeCase]
-) -> CaseSimilarityEngine:
+def _build_engine(hits: list[VectorHit], cases: list[_FakeCase]) -> CaseSimilarityEngine:
     engine = CaseSimilarityEngine.__new__(CaseSimilarityEngine)
     engine._db = MagicMock()  # type: ignore[attr-defined]
     engine._embeddings = _StubEmbeddings()  # type: ignore[attr-defined]

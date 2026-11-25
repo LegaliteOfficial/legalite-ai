@@ -105,8 +105,7 @@ hallucination_floor = Counter(
 # safety limits.
 feedback_total = Counter(
     "legalite_feedback_total",
-    "User feedback (👍/👎) on assistant answers — the input to the "
-    "self-improvement loop.",
+    "User feedback (👍/👎) on assistant answers — the input to the self-improvement loop.",
     labelnames=("thumbs", "query_intent", "confidence", "refused"),
     registry=REGISTRY,
 )
@@ -230,9 +229,7 @@ def record_upload(scope: str, outcome: str) -> None:
 
 
 def record_citation_resolution(resolved: bool) -> None:
-    citation_resolution_outcome.labels(
-        outcome="resolved" if resolved else "unresolved"
-    ).inc()
+    citation_resolution_outcome.labels(outcome="resolved" if resolved else "unresolved").inc()
 
 
 def record_ocr_page(outcome: str) -> None:
@@ -316,9 +313,7 @@ class _NoopTracer:
     """Used when OTel is disabled or the SDK isn't installed."""
 
     @contextlib.contextmanager
-    def start_as_current_span(
-        self, _name: str, **_kwargs: object
-    ) -> Iterator[_NoopSpan]:
+    def start_as_current_span(self, _name: str, **_kwargs: object) -> Iterator[_NoopSpan]:
         yield _NoopSpan()
 
 

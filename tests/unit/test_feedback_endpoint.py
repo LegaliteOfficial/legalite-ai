@@ -112,9 +112,7 @@ def test_rejects_invalid_thumbs(client: TestClient) -> None:
     assert resp.status_code == 422
 
 
-def test_returns_404_when_repo_says_not_found(
-    client: TestClient, repo: _FakeRepo
-) -> None:
+def test_returns_404_when_repo_says_not_found(client: TestClient, repo: _FakeRepo) -> None:
     repo.raises = LookupError("wrong tenant")
     resp = client.post(
         f"/ask/{uuid.uuid4()}/feedback",
@@ -124,9 +122,7 @@ def test_returns_404_when_repo_says_not_found(
     assert resp.json()["detail"] == "message not found"
 
 
-def test_returns_422_when_repo_rejects_role(
-    client: TestClient, repo: _FakeRepo
-) -> None:
+def test_returns_422_when_repo_rejects_role(client: TestClient, repo: _FakeRepo) -> None:
     repo.raises = ValueError("feedback can only be attached to assistant messages")
     resp = client.post(
         f"/ask/{uuid.uuid4()}/feedback",
@@ -150,9 +146,7 @@ def test_returns_422_when_repo_rejects_role(
     ),
     strict=False,
 )
-def test_happy_path_echoes_persisted_row(
-    client: TestClient, repo: _FakeRepo
-) -> None:
+def test_happy_path_echoes_persisted_row(client: TestClient, repo: _FakeRepo) -> None:
     mid = uuid.uuid4()
     resp = client.post(
         f"/ask/{mid}/feedback",
@@ -178,9 +172,7 @@ def test_happy_path_echoes_persisted_row(
     ),
     strict=False,
 )
-def test_tenant_headers_reach_repo(
-    client: TestClient, repo: _FakeRepo
-) -> None:
+def test_tenant_headers_reach_repo(client: TestClient, repo: _FakeRepo) -> None:
     org = uuid.uuid4()
     user = uuid.uuid4()
     client.post(
