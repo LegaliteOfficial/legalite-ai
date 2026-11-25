@@ -34,7 +34,7 @@ from app.schemas.cases import (
     CitationGraphResponse,
     PartyOut,
 )
-from app.services.citation_resolution_service import get_citation_graph
+from app.services.citation_resolution_service import GraphNode, get_citation_graph
 from app.vector_store.qdrant_client import QdrantVectorStore
 
 logger = get_logger(__name__)
@@ -240,14 +240,14 @@ def _to_hit_out(hit: CaseSimilarityHit) -> CaseSimilarHitOut:
     )
 
 
-def _graph_node(n: object) -> CitationGraphNode:
+def _graph_node(n: GraphNode) -> CitationGraphNode:
     """Adapter from the resolver's GraphNode dataclass to the API schema."""
     return CitationGraphNode(
         case_id=n.case_id,
         case_title=n.case_title,
-        case_number=getattr(n, "case_number", None),
-        court=getattr(n, "court", None),
-        confidence=float(getattr(n, "confidence", 0.0)),
+        case_number=n.case_number,
+        court=n.court,
+        confidence=float(n.confidence),
     )
 
 
