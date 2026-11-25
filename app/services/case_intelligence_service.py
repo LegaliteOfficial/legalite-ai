@@ -14,13 +14,13 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.tenant_context import TenantContext
 from app.db.models.legal_case import LegalCase
 from app.db.repositories.case_repository import CaseRepository
 from app.ingestion.embedding_service import EmbeddingService
 from app.rag.case_similarity_engine import CaseSimilarityEngine, CaseSimilarityHit
-from app.core.config import get_settings
 from app.schemas.cases import (
     CaseCompareResponse,
     CaseComparisonField,
@@ -243,8 +243,8 @@ def _to_hit_out(hit: CaseSimilarityHit) -> CaseSimilarHitOut:
 def _graph_node(n: object) -> CitationGraphNode:
     """Adapter from the resolver's GraphNode dataclass to the API schema."""
     return CitationGraphNode(
-        case_id=getattr(n, "case_id"),
-        case_title=getattr(n, "case_title"),
+        case_id=n.case_id,
+        case_title=n.case_title,
         case_number=getattr(n, "case_number", None),
         court=getattr(n, "court", None),
         confidence=float(getattr(n, "confidence", 0.0)),

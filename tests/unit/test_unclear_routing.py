@@ -17,7 +17,6 @@ from app.rag.conversational_responder import (
 from app.rag.query_planner import QueryIntent, QueryPlanner
 from app.services.corpus_inventory import CorpusSnapshot
 
-
 # ── Planner classification ────────────────────────────────────────────────
 
 

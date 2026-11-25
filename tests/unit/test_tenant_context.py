@@ -16,7 +16,6 @@ from app.api.dependencies.tenant import (
 from app.core.tenant_context import TenantContext, parse_role, parse_uuid
 from app.db.enums import TenantRole
 
-
 # ---- pure parsing helpers --------------------------------------------------
 
 

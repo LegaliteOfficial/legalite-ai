@@ -17,19 +17,19 @@ from app.rag.retriever import RetrievedPassage
 
 
 def _passage(**overrides: object) -> RetrievedPassage:
-    base = dict(
-        score=0.5,
-        content="...",
-        law="X",
-        article=None,
-        section=None,
-        chapter=None,
-        clause=None,
-        subsection=None,
-        page_start=1,
-        page_end=1,
-        vector_id="vid",
-    )
+    base = {
+        "score": 0.5,
+        "content": "...",
+        "law": "X",
+        "article": None,
+        "section": None,
+        "chapter": None,
+        "clause": None,
+        "subsection": None,
+        "page_start": 1,
+        "page_end": 1,
+        "vector_id": "vid",
+    }
     base.update(overrides)
     return RetrievedPassage(**base)  # type: ignore[arg-type]
 

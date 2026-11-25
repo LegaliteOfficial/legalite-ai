@@ -10,7 +10,6 @@ The legacy ``/upload-law`` endpoint (in documents.py) is unchanged.
 """
 
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy.orm import Session
@@ -21,13 +20,13 @@ from app.core.rate_limit import limiter
 from app.core.tenant_context import TenantContext
 from app.db.enums import (
     GLOBAL_ONLY_ORIGINS,
+    ConfidentialityLevel,
     DocumentOrigin,
     VisibilityScope,
 )
 from app.db.session import get_db
 from app.schemas.jobs import JobEnqueuedResponse
 from app.services.upload_dispatcher import dispatch_upload
-from app.db.enums import ConfidentialityLevel
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -45,7 +44,7 @@ async def admin_upload_law(
     file: UploadFile = File(..., description="Ghana legal PDF (Constitution, Act, Regulation, Case)"),
     title: str = Form(..., min_length=2, max_length=512),
     doc_type: str = Form(..., description="Constitution | Act | Regulation | Case Law | ..."),
-    document_origin: Optional[DocumentOrigin] = Form(
+    document_origin: DocumentOrigin | None = Form(
         default=None,
         description=(
             "Optional explicit classification. Must be a global origin: "

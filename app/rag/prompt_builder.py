@@ -30,7 +30,6 @@ from dataclasses import dataclass
 from app.rag.authority import TIER_LABEL, ordered_tiers, partition_by_tier
 from app.rag.retriever import RetrievedPassage
 
-
 REFUSAL_TEXT = "I could not confidently determine this from the provided Ghana legal materials."
 DISCLAIMER = "This information is for educational purposes and not legal advice."
 

@@ -338,7 +338,7 @@ async def upload_law_bulk(
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
-class _BulkRejected(Exception):
+class _BulkRejected(Exception):  # noqa: N818 - internal sentinel, not a public error type
     """Internal sentinel — a single file failed validation cleanly.
 
     Carries the user-facing reason so the route handler can append a

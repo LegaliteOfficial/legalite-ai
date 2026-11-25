@@ -45,6 +45,7 @@ from arq.worker import Retry
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.telemetry import ingestion_job_state
+from app.core.tenant_context import TenantContext
 from app.db.enums import (
     ConfidentialityLevel,
     DocumentOrigin,
@@ -53,7 +54,6 @@ from app.db.enums import (
 )
 from app.db.repositories.job_repository import JobRepository
 from app.db.session import SessionLocal
-from app.core.tenant_context import TenantContext
 from app.services.ingestion_service import IngestionService
 
 logger = get_logger(__name__)

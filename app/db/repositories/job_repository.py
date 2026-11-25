@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -46,7 +46,7 @@ class JobRepository:
             storage_path=request.storage_path,
             status="queued",
             progress=0,
-            enqueued_at=datetime.now(timezone.utc),
+            enqueued_at=datetime.now(UTC),
         )
         self._db.add(job)
         self._db.flush()
@@ -124,7 +124,7 @@ class JobRepository:
             return
         job.status = "processing"
         job.progress = max(job.progress, 5)
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         self._db.flush()
 
     def mark_completed(
@@ -136,7 +136,7 @@ class JobRepository:
         job.status = "completed"
         job.progress = 100
         job.document_id = document_id
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         self._db.flush()
 
     def mark_failed(self, job_id: uuid.UUID, *, error: str) -> None:
@@ -145,7 +145,7 @@ class JobRepository:
             return
         job.status = "failed"
         job.error_message = error[:2000]
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         self._db.flush()
 
     def bump_progress(self, job_id: uuid.UUID, *, progress: int) -> None:

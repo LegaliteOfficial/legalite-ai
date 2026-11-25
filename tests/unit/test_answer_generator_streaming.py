@@ -25,23 +25,23 @@ from app.rag.retriever import RetrievedPassage
 
 
 def _passage(score: float = 0.8, **overrides: object) -> RetrievedPassage:
-    base = dict(
-        score=score,
-        original_score=score,
-        content="Section 17 says a landlord must give notice.",
-        law="Rent Act",
-        article=None,
-        section="17",
-        chapter=None,
-        clause=None,
-        subsection=None,
-        page_start=12,
-        page_end=12,
-        vector_id="vid",
-        law_type="act",
-        document_origin="act",
-        visibility_scope="global",
-    )
+    base = {
+        "score": score,
+        "original_score": score,
+        "content": "Section 17 says a landlord must give notice.",
+        "law": "Rent Act",
+        "article": None,
+        "section": "17",
+        "chapter": None,
+        "clause": None,
+        "subsection": None,
+        "page_start": 12,
+        "page_end": 12,
+        "vector_id": "vid",
+        "law_type": "act",
+        "document_origin": "act",
+        "visibility_scope": "global",
+    }
     base.update(overrides)
     return RetrievedPassage(**base)  # type: ignore[arg-type]
 

@@ -19,6 +19,7 @@ buffered raw text once the stream ends — see
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
@@ -84,10 +85,8 @@ class JSONStringFieldStreamer:
             elif self._state is _State.IN_UNICODE_ESCAPE:
                 self._unicode_buf += ch
                 if len(self._unicode_buf) == 4:
-                    try:
+                    with contextlib.suppress(ValueError):
                         out.append(chr(int(self._unicode_buf, 16)))
-                    except ValueError:
-                        pass
                     self._state = _State.IN_STRING
         return "".join(out)
 

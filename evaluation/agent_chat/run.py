@@ -26,8 +26,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.tenant_context import TenantContext
 from app.core.config import get_settings
+from app.core.tenant_context import TenantContext
 from app.rag.chat_agent import AgentResult, AgentStatus, ChatAgent, ChatTurn, clean_history_text
 from app.rag.conversation_memory import ConversationSummarizer, build_memory_message
 from app.rag.legal_memory import LegalMemory

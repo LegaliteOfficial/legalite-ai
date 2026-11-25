@@ -159,7 +159,7 @@ def _pick(question: str, variants: tuple[str, ...]) -> str:
     want stability so two replicas serving the same user-input return the
     same text (helps debugging and avoids look-mismatch in screenshots).
     """
-    digest = hashlib.md5(question.strip().lower().encode("utf-8")).digest()
+    digest = hashlib.md5(question.strip().lower().encode("utf-8"), usedforsecurity=False).digest()
     return variants[digest[0] % len(variants)]
 
 
@@ -436,7 +436,7 @@ def _index_for(seed: str, n: int) -> int:
     """
     if n <= 0:
         return 0
-    digest = hashlib.md5(seed.strip().lower().encode("utf-8")).digest()
+    digest = hashlib.md5(seed.strip().lower().encode("utf-8"), usedforsecurity=False).digest()
     return digest[0] % n
 
 

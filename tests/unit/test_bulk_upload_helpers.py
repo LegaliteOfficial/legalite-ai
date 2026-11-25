@@ -25,7 +25,6 @@ from app.api.routes.documents import (
     _validate_and_extract_title,
 )
 
-
 # ── Title derivation ──────────────────────────────────────────────────────
 
 

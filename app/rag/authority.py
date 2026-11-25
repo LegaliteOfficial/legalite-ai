@@ -19,7 +19,6 @@ from typing import Literal
 from app.db.enums import DocumentOrigin, VisibilityScope
 from app.rag.retriever import RetrievedPassage
 
-
 SourceScope = Literal["global", "tenant_private"]
 
 

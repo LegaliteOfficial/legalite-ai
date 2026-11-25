@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     # --- Application -------------------------------------------------------
     app_name: str = "legalite-ai"
     app_env: AppEnv = "development"
-    app_host: str = "0.0.0.0"
+    app_host: str = "0.0.0.0"  # noqa: S104 - the service runs in a container behind the platform proxy
     app_port: int = 8000
     log_level: str = "INFO"
     debug: bool = False
@@ -254,7 +254,7 @@ class Settings(BaseSettings):
     postgres_host: str = "postgres"
     postgres_port: int = 5432
     postgres_user: str = "legalite"
-    postgres_password: str = "legalite_dev_password"
+    postgres_password: str = "legalite_dev_password"  # noqa: S105 - local docker-compose default only
     postgres_db: str = "legalite"
     database_url: str | None = None  # explicit override wins
 

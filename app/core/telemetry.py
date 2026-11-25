@@ -305,7 +305,7 @@ class _NoopSpan:
     def set_attribute(self, *_args: object, **_kwargs: object) -> None:  # pragma: no cover
         return
 
-    def __enter__(self) -> "_NoopSpan":
+    def __enter__(self) -> _NoopSpan:
         return self
 
     def __exit__(self, *_exc: object) -> None:
@@ -376,8 +376,6 @@ def traced(name: str, **attributes: object) -> Iterator[object]:
     tracer = get_tracer()
     with tracer.start_as_current_span(name) as span:  # type: ignore[attr-defined]
         for k, v in attributes.items():
-            try:
+            with contextlib.suppress(Exception):  # pragma: no cover
                 span.set_attribute(k, v)
-            except Exception:  # pragma: no cover
-                pass
         yield span

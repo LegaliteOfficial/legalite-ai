@@ -34,7 +34,6 @@ from evaluation.tenant_isolation.assertions import (
     isolation_score_from_reports,
 )
 from evaluation.tenant_isolation.scenarios import (
-    IsolationDocument,
     IsolationFirm,
     IsolationScenario,
     build_default_scenario,

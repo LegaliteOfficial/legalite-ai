@@ -31,7 +31,7 @@ import re
 import uuid
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import or_, select
@@ -181,7 +181,7 @@ class CitationResolutionService:
         if resolved:
             edge.cited_case_id = best_id
             edge.resolution_confidence = Decimal(f"{best_score:.3f}")
-            edge.resolved_at = datetime.now(timezone.utc)
+            edge.resolved_at = datetime.now(UTC)
         record_citation_resolution(resolved)
 
         return ResolutionResult(

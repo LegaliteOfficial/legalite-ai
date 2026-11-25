@@ -105,7 +105,7 @@ class CaseSimilarityEngine:
             return []
 
         try:
-            doc_uuids = [uuid.UUID(d) for d in doc_to_score.keys()]
+            doc_uuids = [uuid.UUID(d) for d in doc_to_score]
         except ValueError:
             doc_uuids = []
         cases = self._cases_by_document_ids(doc_uuids, organization_id=org_id)
