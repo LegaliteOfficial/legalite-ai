@@ -111,9 +111,7 @@ class CorpusInventoryService:
         count_rows = self._db.execute(
             select(LegalDocument.doc_type, func.count())
             .where(LegalDocument.status == "ingested")
-            .where(
-                LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value
-            )
+            .where(LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value)
             .group_by(LegalDocument.doc_type)
         ).all()
         counts: dict[str, int] = {}
@@ -126,9 +124,7 @@ class CorpusInventoryService:
                 select(LegalDocument.title)
                 .where(LegalDocument.doc_type == doc_type)
                 .where(LegalDocument.status == "ingested")
-                .where(
-                    LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value
-                )
+                .where(LegalDocument.visibility_scope == VisibilityScope.GLOBAL.value)
                 .order_by(LegalDocument.created_at.desc())
                 .limit(_SAMPLES_PER_TYPE)
             ).scalars()

@@ -164,8 +164,10 @@ def main() -> int:
     if args.json:
         print(json.dumps(summary, indent=1, default=str))
         return 0
-    print(f"{summary['mode']}: {summary['chunks_changed']} of {total_chunks} chunks in "
-          f"{summary['documents_changed']} documents need new labels")
+    print(
+        f"{summary['mode']}: {summary['chunks_changed']} of {total_chunks} chunks in "
+        f"{summary['documents_changed']} documents need new labels"
+    )
     print("fields:", summary["fields_changed"])
     if args.apply:
         print(f"qdrant: {qdrant_updated} points updated, {missing_points} not in the collection")

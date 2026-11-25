@@ -51,7 +51,9 @@ def test_request_is_one_shot_and_bound_to_question_and_user() -> None:
 
 
 def test_scopes_and_subject() -> None:
-    scopes = describe_calls([("find_cases", {"query": "Mensah"}), ("find_cases", {"query": "Mensah"})])
+    scopes = describe_calls(
+        [("find_cases", {"query": "Mensah"}), ("find_cases", {"query": "Mensah"})]
+    )
     assert scopes == ["Search your cases for “Mensah”"]
     assert token_subject(None) == "anonymous"
     assert token_subject("abc").startswith("tok:")

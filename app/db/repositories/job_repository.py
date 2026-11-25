@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -46,7 +46,7 @@ class JobRepository:
             storage_path=request.storage_path,
             status="queued",
             progress=0,
-            enqueued_at=datetime.now(timezone.utc),
+            enqueued_at=datetime.now(UTC),
         )
         self._db.add(job)
         self._db.flush()
@@ -75,9 +75,7 @@ class JobRepository:
         query = (
             select(IngestionJob)
             .where(IngestionJob.title.in_(titles))
-            .where(
-                IngestionJob.visibility_scope == VisibilityScope.GLOBAL.value
-            )
+            .where(IngestionJob.visibility_scope == VisibilityScope.GLOBAL.value)
             .where(IngestionJob.status.in_(("queued", "processing")))
         )
         if doc_type is not None:
@@ -98,9 +96,7 @@ class JobRepository:
         """
         if not job_ids:
             return []
-        rows = self._db.execute(
-            select(IngestionJob).where(IngestionJob.id.in_(job_ids))
-        ).scalars()
+        rows = self._db.execute(select(IngestionJob).where(IngestionJob.id.in_(job_ids))).scalars()
         return list(rows)
 
     def count_chunks(self, document_id: uuid.UUID) -> int:
@@ -124,19 +120,17 @@ class JobRepository:
             return
         job.status = "processing"
         job.progress = max(job.progress, 5)
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         self._db.flush()
 
-    def mark_completed(
-        self, job_id: uuid.UUID, *, document_id: uuid.UUID
-    ) -> None:
+    def mark_completed(self, job_id: uuid.UUID, *, document_id: uuid.UUID) -> None:
         job = self._db.get(IngestionJob, job_id)
         if job is None:
             return
         job.status = "completed"
         job.progress = 100
         job.document_id = document_id
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         self._db.flush()
 
     def mark_failed(self, job_id: uuid.UUID, *, error: str) -> None:
@@ -145,7 +139,7 @@ class JobRepository:
             return
         job.status = "failed"
         job.error_message = error[:2000]
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         self._db.flush()
 
     def bump_progress(self, job_id: uuid.UUID, *, progress: int) -> None:

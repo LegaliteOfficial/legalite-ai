@@ -74,9 +74,7 @@ class _FakeLlm:
 
 def test_llm_label_and_summary_are_used() -> None:
     llm = _FakeLlm(
-        content=json.dumps(
-            {"doc_type": "case law", "summary": "Supreme Court ruling on bail."}
-        )
+        content=json.dumps({"doc_type": "case law", "summary": "Supreme Court ruling on bail."})
     )
     result = DocumentClassifier(llm_client=llm, llm_enabled=True).classify(  # type: ignore[arg-type]
         _parsed("BE IT ENACTED"), "anything"

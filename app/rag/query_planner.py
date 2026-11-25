@@ -349,9 +349,7 @@ class QueryPlanner:
                     new_score = min(0.95, prev_score + rule.weight)
                     conv_scored[rule.intent] = (new_score, [*signals, rule.label])
             if conv_scored:
-                intent, (confidence, signals) = max(
-                    conv_scored.items(), key=lambda x: x[1][0]
-                )
+                intent, (confidence, signals) = max(conv_scored.items(), key=lambda x: x[1][0])
                 return QueryPlan(
                     intent=intent,
                     confidence=confidence,
@@ -460,8 +458,8 @@ _LLM_SYSTEM = (
     "statute_question, case_similarity, case_comparison, case_summary, "
     "procedural_question, tenant_contextual, follow_up, insufficient_context, "
     "general_legal_qa.\n"
-    "Return strict JSON: {\"intent\": <one>, \"confidence\": <0..1>, "
-    "\"rationale\": <short>}.\n"
+    'Return strict JSON: {"intent": <one>, "confidence": <0..1>, '
+    '"rationale": <short>}.\n'
     "Never invent intents outside the list. Never answer the question itself."
 )
 

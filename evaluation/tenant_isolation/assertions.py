@@ -39,14 +39,13 @@ def assert_no_leakage(
 
     for p in passages:
         scope = (p.visibility_scope or "global").lower()
-        if scope == "tenant_private":
-            if p.organization_id != requesting_org_id:
-                bad += 1
-                details.append(
-                    f"tenant_private chunk org={p.organization_id!r} "
-                    f"surfaced for caller {requesting_org_id!r} "
-                    f"(law_type={p.law_type}, vector_id={p.vector_id})"
-                )
+        if scope == "tenant_private" and p.organization_id != requesting_org_id:
+            bad += 1
+            details.append(
+                f"tenant_private chunk org={p.organization_id!r} "
+                f"surfaced for caller {requesting_org_id!r} "
+                f"(law_type={p.law_type}, vector_id={p.vector_id})"
+            )
         content = p.content or ""
         for marker in forbidden:
             if marker in content:

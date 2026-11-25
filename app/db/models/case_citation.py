@@ -26,14 +26,10 @@ if TYPE_CHECKING:
 class CaseCitation(Base, TimestampMixin):
     __tablename__ = "case_citations"
     __table_args__ = (
-        UniqueConstraint(
-            "citing_case_id", "cited_raw_text", name="uq_case_citations_edge"
-        ),
+        UniqueConstraint("citing_case_id", "cited_raw_text", name="uq_case_citations_edge"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     citing_case_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("legal_cases.id", ondelete="CASCADE"),
@@ -53,9 +49,7 @@ class CaseCitation(Base, TimestampMixin):
     resolution_confidence: Mapped[Decimal | None] = mapped_column(
         Numeric(precision=4, scale=3), nullable=True
     )
-    resolved_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     citing_case: Mapped[LegalCase] = relationship(
         back_populates="citing",

@@ -25,23 +25,23 @@ from app.rag.retriever import RetrievedPassage
 
 
 def _passage(score: float = 0.8, **overrides: object) -> RetrievedPassage:
-    base = dict(
-        score=score,
-        original_score=score,
-        content="Section 17 says a landlord must give notice.",
-        law="Rent Act",
-        article=None,
-        section="17",
-        chapter=None,
-        clause=None,
-        subsection=None,
-        page_start=12,
-        page_end=12,
-        vector_id="vid",
-        law_type="act",
-        document_origin="act",
-        visibility_scope="global",
-    )
+    base = {
+        "score": score,
+        "original_score": score,
+        "content": "Section 17 says a landlord must give notice.",
+        "law": "Rent Act",
+        "article": None,
+        "section": "17",
+        "chapter": None,
+        "clause": None,
+        "subsection": None,
+        "page_start": 12,
+        "page_end": 12,
+        "vector_id": "vid",
+        "law_type": "act",
+        "document_origin": "act",
+        "visibility_scope": "global",
+    }
     base.update(overrides)
     return RetrievedPassage(**base)  # type: ignore[arg-type]
 
@@ -108,7 +108,9 @@ def _make_generator(payload: str) -> AnswerGenerator:
     return AnswerGenerator(client=_MockClient(payload))  # type: ignore[arg-type]
 
 
-def _run_stream(gen: AnswerGenerator, question: str, passages: list[RetrievedPassage]) -> tuple[str, GeneratedAnswer]:
+def _run_stream(
+    gen: AnswerGenerator, question: str, passages: list[RetrievedPassage]
+) -> tuple[str, GeneratedAnswer]:
     deltas: list[str] = []
     result: GeneratedAnswer | None = None
     for item in gen.generate_stream(question, passages):
@@ -145,9 +147,7 @@ _GOOD_JSON = json.dumps(
 
 def test_deltas_match_direct_answer_and_final_result_is_not_refused() -> None:
     gen = _make_generator(_GOOD_JSON)
-    streamed_text, result = _run_stream(
-        gen, "Can a landlord evict without notice?", [_passage()]
-    )
+    streamed_text, result = _run_stream(gen, "Can a landlord evict without notice?", [_passage()])
     assert streamed_text == "Yes, a landlord must give notice before eviction."
     assert not result.refused
     assert result.structured.direct_answer == streamed_text

@@ -63,18 +63,30 @@ def test_diff_surfaces_only_differing_fields() -> None:
 
 def test_topic_overlap_returns_intersection() -> None:
     a = _MiniCase(
-        id=uuid.uuid4(), court=None, decision_date=None, outcome=None,
-        holding=None, case_number=None,
+        id=uuid.uuid4(),
+        court=None,
+        decision_date=None,
+        outcome=None,
+        holding=None,
+        case_number=None,
         legal_topics=["contract", "property", "tort"],
     )
     b = _MiniCase(
-        id=uuid.uuid4(), court=None, decision_date=None, outcome=None,
-        holding=None, case_number=None,
+        id=uuid.uuid4(),
+        court=None,
+        decision_date=None,
+        outcome=None,
+        holding=None,
+        case_number=None,
         legal_topics=["property", "tort", "criminal"],
     )
     c = _MiniCase(
-        id=uuid.uuid4(), court=None, decision_date=None, outcome=None,
-        holding=None, case_number=None,
+        id=uuid.uuid4(),
+        court=None,
+        decision_date=None,
+        outcome=None,
+        holding=None,
+        case_number=None,
         legal_topics=["property"],
     )
     overlap = _topic_overlap_all([a, b, c])  # type: ignore[arg-type]
@@ -83,11 +95,21 @@ def test_topic_overlap_returns_intersection() -> None:
 
 def test_topic_overlap_empty_when_no_common_topic() -> None:
     a = _MiniCase(
-        id=uuid.uuid4(), court=None, decision_date=None, outcome=None,
-        holding=None, case_number=None, legal_topics=["contract"],
+        id=uuid.uuid4(),
+        court=None,
+        decision_date=None,
+        outcome=None,
+        holding=None,
+        case_number=None,
+        legal_topics=["contract"],
     )
     b = _MiniCase(
-        id=uuid.uuid4(), court=None, decision_date=None, outcome=None,
-        holding=None, case_number=None, legal_topics=["criminal"],
+        id=uuid.uuid4(),
+        court=None,
+        decision_date=None,
+        outcome=None,
+        holding=None,
+        case_number=None,
+        legal_topics=["criminal"],
     )
     assert _topic_overlap_all([a, b]) == []  # type: ignore[arg-type]

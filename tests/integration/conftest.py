@@ -20,6 +20,7 @@ runs with ``LEGALITE_INTEGRATION_ENABLED=true pytest -q tests/integration``.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import uuid
@@ -96,10 +97,8 @@ class _TestVectorStore:
     store: object  # QdrantVectorStore — Any so import stays lazy
 
     def cleanup(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.store._client.delete_collection(collection_name=self.collection_name)  # type: ignore[attr-defined]
-        except Exception:
-            pass
 
 
 @pytest.fixture

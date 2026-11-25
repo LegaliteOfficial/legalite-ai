@@ -111,9 +111,7 @@ class QAService:
         embeddings = embeddings or EmbeddingService()
         vector_store = vector_store or get_vector_store()
 
-        self._retriever = HybridRetriever(
-            db=db, embeddings=embeddings, vector_store=vector_store
-        )
+        self._retriever = HybridRetriever(db=db, embeddings=embeddings, vector_store=vector_store)
         self._reranker = reranker or build_reranker()
         # The rewriter is constructed eagerly so its in-process cache is
         # shared across requests on the same QAService instance.
@@ -293,7 +291,9 @@ class QAService:
                             yield SSEEvent(event="answer_delta", data={"text": item})
                         else:
                             result = item
-                assert result is not None  # generate_stream always yields exactly one GeneratedAnswer
+                assert (
+                    result is not None
+                )  # generate_stream always yields exactly one GeneratedAnswer
 
                 response = self._finalize(
                     sid, question, plan, scope_label, passages, cross, result, t0
@@ -326,12 +326,8 @@ class QAService:
                     event="citations",
                     data={
                         "applicable_law": [c.model_dump() for c in sa.applicable_law],
-                        "relevant_public_cases": [
-                            c.model_dump() for c in sa.relevant_public_cases
-                        ],
-                        "firm_similar_cases": [
-                            c.model_dump() for c in sa.firm_similar_cases
-                        ],
+                        "relevant_public_cases": [c.model_dump() for c in sa.relevant_public_cases],
+                        "firm_similar_cases": [c.model_dump() for c in sa.firm_similar_cases],
                         "citation_ids": sa.citations,
                     },
                 )
@@ -490,9 +486,7 @@ class QAService:
                 assert result is not None
 
                 if result.mode == "permission_required":
-                    response = self._pause_for_permission(
-                        sid, question, plan, result, user_token
-                    )
+                    response = self._pause_for_permission(sid, question, plan, result, user_token)
                     assert response.permission_request is not None
                     yield SSEEvent(
                         event="permission_required",
@@ -751,10 +745,7 @@ class QAService:
         *,
         tenant: TenantContext | None,
         t0: float,
-    ) -> (
-        AskResponse
-        | tuple[QueryPlan, str, MemoryContext, list[RetrievedPassage], CrossDocResult]
-    ):
+    ) -> AskResponse | tuple[QueryPlan, str, MemoryContext, list[RetrievedPassage], CrossDocResult]:
         """Session/memory setup, intent planning, and retrieval — the part
         of the pipeline that is identical whether the answer ends up
         streamed or not. Returns an early :class:`AskResponse` for the
@@ -872,9 +863,7 @@ class QAService:
             record_refusal("generator")
         record_ask(scope=scope_label, intent=plan.intent.value, confidence=result.confidence)
 
-        citations: list[Citation] = (
-            [] if result.refused else format_citations(result.used_passages)
-        )
+        citations: list[Citation] = [] if result.refused else format_citations(result.used_passages)
         sources = [] if result.refused else format_sources(result.used_passages)
         record_hallucination_floor_if_ungrounded(
             confidence=result.confidence, has_citations=bool(citations)

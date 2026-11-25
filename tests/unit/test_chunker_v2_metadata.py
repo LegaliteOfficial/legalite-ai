@@ -7,9 +7,7 @@ from app.ingestion.pdf_parser import ParsedPdf, PdfPage
 
 
 def _parsed(text_pages: list[str]) -> ParsedPdf:
-    return ParsedPdf(
-        pages=[PdfPage(page_number=i + 1, text=t) for i, t in enumerate(text_pages)]
-    )
+    return ParsedPdf(pages=[PdfPage(page_number=i + 1, text=t) for i, t in enumerate(text_pages)])
 
 
 def test_detects_constitution() -> None:
@@ -49,11 +47,7 @@ def test_detects_act_number_and_year() -> None:
 
 def test_topic_heuristic_employment() -> None:
     parsed = _parsed(
-        [
-            "LABOUR ACT, 2003 (ACT 651)\n"
-            "SECTION 15\n"
-            "Wages must be paid promptly to every employee.\n"
-        ]
+        ["LABOUR ACT, 2003 (ACT 651)\nSECTION 15\nWages must be paid promptly to every employee.\n"]
     )
     chunks = LegalChunker().chunk(parsed, doc_title="Labour Act")
     assert any(c.legal_topic == "employment" for c in chunks)

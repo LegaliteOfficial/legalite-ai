@@ -57,9 +57,7 @@ class GeneratedAnswer:
     used_passages: list[RetrievedPassage]
     refused: bool
     reasoning_summary: str
-    structured: StructuredAnswer = field(
-        default_factory=lambda: StructuredAnswer(direct_answer="")
-    )
+    structured: StructuredAnswer = field(default_factory=lambda: StructuredAnswer(direct_answer=""))
     tokens_in: int = 0
     tokens_out: int = 0
     latency_ms: int = 0
@@ -186,9 +184,7 @@ class AnswerGenerator:
         latency_ms = int((time.perf_counter() - t0) * 1000)
 
         raw_content = "".join(raw_parts).strip()
-        yield self._finalize_from_raw(
-            passages, pre, raw_content, latency_ms, tokens_in, tokens_out
-        )
+        yield self._finalize_from_raw(passages, pre, raw_content, latency_ms, tokens_in, tokens_out)
 
     def _finalize_from_raw(
         self,

@@ -17,19 +17,19 @@ from app.rag.retriever import RetrievedPassage
 
 
 def _passage(**overrides: object) -> RetrievedPassage:
-    base = dict(
-        score=0.5,
-        content="...",
-        law="X",
-        article=None,
-        section=None,
-        chapter=None,
-        clause=None,
-        subsection=None,
-        page_start=1,
-        page_end=1,
-        vector_id="vid",
-    )
+    base = {
+        "score": 0.5,
+        "content": "...",
+        "law": "X",
+        "article": None,
+        "section": None,
+        "chapter": None,
+        "clause": None,
+        "subsection": None,
+        "page_start": 1,
+        "page_end": 1,
+        "vector_id": "vid",
+    }
     base.update(overrides)
     return RetrievedPassage(**base)  # type: ignore[arg-type]
 
@@ -52,12 +52,8 @@ def test_act_outranks_regulation_outranks_case_law() -> None:
 
 
 def test_tenant_origins_classify_under_their_specific_tier() -> None:
-    sample = classify(
-        _passage(document_origin="sample_case", visibility_scope="tenant_private")
-    )
-    memo = classify(
-        _passage(document_origin="internal_memo", visibility_scope="tenant_private")
-    )
+    sample = classify(_passage(document_origin="sample_case", visibility_scope="tenant_private"))
+    memo = classify(_passage(document_origin="internal_memo", visibility_scope="tenant_private"))
     tpl = classify(_passage(document_origin="template", visibility_scope="tenant_private"))
     assert sample.tier == "tenant_sample_case"
     assert memo.tier == "tenant_internal_memo"
@@ -77,9 +73,7 @@ def test_law_type_fallback_when_origin_missing() -> None:
 
 
 def test_tenant_chunk_without_origin_downgrades_to_private_reference() -> None:
-    cls = classify(
-        _passage(visibility_scope="tenant_private", law_type="act")
-    )
+    cls = classify(_passage(visibility_scope="tenant_private", law_type="act"))
     # Even when the chunker says "act", a tenant-private chunk must NEVER be
     # treated as authoritative law. It collapses to tenant_private_reference.
     assert cls.tier == "tenant_private_reference"
@@ -114,7 +108,9 @@ def test_partition_preserves_within_tier_order() -> None:
     what the caller hands us)."""
     a1 = _passage(law="Act A", document_origin="act", visibility_scope="global", rerank_score=0.9)
     a2 = _passage(law="Act B", document_origin="act", visibility_scope="global", rerank_score=0.6)
-    case = _passage(law="Case X", document_origin="case_law", visibility_scope="global", rerank_score=0.7)
+    case = _passage(
+        law="Case X", document_origin="case_law", visibility_scope="global", rerank_score=0.7
+    )
     buckets = partition_by_tier([a1, a2, case])
     assert [p.law for p in buckets["act"]] == ["Act A", "Act B"]
     assert [p.law for p in buckets["public_case_law"]] == ["Case X"]

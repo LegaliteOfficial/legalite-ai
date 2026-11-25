@@ -51,10 +51,7 @@ def test_tenant_job_visible_to_same_org() -> None:
 
 
 def test_tenant_job_hidden_from_other_org() -> None:
-    assert (
-        _job_visible(_Job(organization_id=uuid.uuid4()), _ctx(org=uuid.uuid4()))
-        is False
-    )
+    assert _job_visible(_Job(organization_id=uuid.uuid4()), _ctx(org=uuid.uuid4())) is False
 
 
 def test_tenant_job_hidden_from_anonymous() -> None:

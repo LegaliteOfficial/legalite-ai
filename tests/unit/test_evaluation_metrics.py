@@ -118,9 +118,7 @@ def test_unverified_cases_excluded_from_verified_baseline() -> None:
     """The core Phase 2 bug fix: an unverified case's guessed expected_law
     must not silently blend into the numbers a reader would treat as
     trustworthy."""
-    verified_case = EvalCase(
-        id="v", question="Q", expected_law="Labour Act", verified=True
-    )
+    verified_case = EvalCase(id="v", question="Q", expected_law="Labour Act", verified=True)
     unverified_case = EvalCase(
         id="u", question="Q", expected_law="Totally Wrong Act", verified=False
     )

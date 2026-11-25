@@ -38,7 +38,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--org-id", required=True)
     parser.add_argument("--user-id", required=True)
-    parser.add_argument("--role", required=True, choices=["owner", "admin", "lawyer", "associate", "viewer"])
+    parser.add_argument(
+        "--role", required=True, choices=["owner", "admin", "lawyer", "associate", "viewer"]
+    )
     parser.add_argument(
         "--timestamp",
         type=int,

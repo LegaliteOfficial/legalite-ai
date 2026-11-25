@@ -19,19 +19,19 @@ from app.rag.retriever import RetrievedPassage
 
 
 def _passage(**overrides: object) -> RetrievedPassage:
-    base = dict(
-        score=0.6,
-        content="Passage content here.",
-        law="Test Law",
-        article=None,
-        section=None,
-        chapter=None,
-        clause=None,
-        subsection=None,
-        page_start=10,
-        page_end=10,
-        vector_id="vid",
-    )
+    base = {
+        "score": 0.6,
+        "content": "Passage content here.",
+        "law": "Test Law",
+        "article": None,
+        "section": None,
+        "chapter": None,
+        "clause": None,
+        "subsection": None,
+        "page_start": 10,
+        "page_end": 10,
+        "vector_id": "vid",
+    }
     base.update(overrides)
     return RetrievedPassage(**base)  # type: ignore[arg-type]
 
@@ -69,9 +69,13 @@ def test_system_prompt_forbids_invention_and_cross_tenant_leakage() -> None:
     # Fabrication block.
     assert "NEVER fabricate" in SYSTEM_PROMPT
     # Cross-tenant block.
-    assert "another firm" in SYSTEM_PROMPT.lower() or "another organization" in SYSTEM_PROMPT.lower()
-    assert "tenant-private materials belonging to other organizations" in SYSTEM_PROMPT.lower() \
+    assert (
+        "another firm" in SYSTEM_PROMPT.lower() or "another organization" in SYSTEM_PROMPT.lower()
+    )
+    assert (
+        "tenant-private materials belonging to other organizations" in SYSTEM_PROMPT.lower()
         or "NEVER reveal, summarize, or hint" in SYSTEM_PROMPT
+    )
 
 
 def test_system_prompt_pins_the_exact_refusal_sentence() -> None:

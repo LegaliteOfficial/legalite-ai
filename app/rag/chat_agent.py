@@ -456,7 +456,9 @@ class ChatAgent:
                     page_context=page_context,
                     profile=profile,
                     workspace_available=workspace is not None,
-                    workspace_access=workspace_access if workspace is not None or workspace_access in ("denied", "disabled") else None,
+                    workspace_access=workspace_access
+                    if workspace is not None or workspace_access in ("denied", "disabled")
+                    else None,
                 ),
             },
         ]
@@ -906,7 +908,9 @@ def is_research_question(question: str) -> bool:
     q = question.strip()
     if len(q) >= 1200:
         return True
-    parts = len(re.findall(r"\?", q)) + len(re.findall(r"(?m)^\s*(?:\d{1,2}[.)]|\([a-z]\)|[-*])\s+", q))
+    parts = len(re.findall(r"\?", q)) + len(
+        re.findall(r"(?m)^\s*(?:\d{1,2}[.)]|\([a-z]\)|[-*])\s+", q)
+    )
     if len(q) >= 400 and (parts >= 3 or _RESEARCH_CUES.search(q)):
         return True
     return parts >= 5
@@ -916,11 +920,43 @@ _SECTION_REF_RE = re.compile(r"\b(?:[Ss]ections?|[Ss]s?\.)\s*(\d{1,3}[A-Z]?)\b")
 _ARTICLE_REF_RE = re.compile(r"\b[Aa]rticles?\s+(\d{1,3}[A-Z]?)\b")
 _PARTY = r"[A-Z][A-Za-z.&'’-]+(?:\s+(?:[A-Z][A-Za-z.&'’-]+|of|and|&))*"
 _CASE_REF_RE = re.compile(rf"\b({_PARTY})\s+(?:v|vs|vrs|versus)\.?\s+({_PARTY})")
-_CASE_NOISE = {"the", "in", "re", "and", "of", "ltd", "limited", "&", "another", "others", "republic"}
+_CASE_NOISE = {
+    "the",
+    "in",
+    "re",
+    "and",
+    "of",
+    "ltd",
+    "limited",
+    "&",
+    "another",
+    "others",
+    "republic",
+}
 # Words that start a sentence before a case name ("See Brown v Quarshie").
 _CASE_LEAD = {
-    "see", "per", "under", "following", "cf", "also", "applying", "unlike", "like", "as", "by",
-    "from", "after", "contrast", "in", "the", "and", "but", "while", "whereas", "thus", "here",
+    "see",
+    "per",
+    "under",
+    "following",
+    "cf",
+    "also",
+    "applying",
+    "unlike",
+    "like",
+    "as",
+    "by",
+    "from",
+    "after",
+    "contrast",
+    "in",
+    "the",
+    "and",
+    "but",
+    "while",
+    "whereas",
+    "thus",
+    "here",
 }
 
 
@@ -964,14 +1000,24 @@ def unsupported_references(
         return bool(re.search(rf"(?m)^\s*{re.escape(n)}\.\s", corpus))
 
     for n in dict.fromkeys(_SECTION_REF_RE.findall(answer)):
-        if n not in labels_s and not mentioned(n, "section") and f"section {n.lower()}" not in norm_q:
+        if (
+            n not in labels_s
+            and not mentioned(n, "section")
+            and f"section {n.lower()}" not in norm_q
+        ):
             out.append(f"section {n}")
     for n in dict.fromkeys(_ARTICLE_REF_RE.findall(answer)):
-        if n not in labels_a and not mentioned(n, "article") and f"article {n.lower()}" not in norm_q:
+        if (
+            n not in labels_a
+            and not mentioned(n, "article")
+            and f"article {n.lower()}" not in norm_q
+        ):
             out.append(f"article {n}")
     for raw_a, raw_b in dict.fromkeys(_CASE_REF_RE.findall(answer)):
         a, b = _party(raw_a, lead=True), _party(raw_b, lead=False)
-        words = [w for w in _norm(a).split() + _norm(b).split() if w not in _CASE_NOISE and len(w) > 2]
+        words = [
+            w for w in _norm(a).split() + _norm(b).split() if w not in _CASE_NOISE and len(w) > 2
+        ]
         if not words:
             continue
         if all(w in q_words for w in words):

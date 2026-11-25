@@ -246,9 +246,7 @@ def refusal_correctness(runs: list[EvalRun]) -> float | None:
     hits = 0
     for r in runs:
         is_low = r.response.confidence == "low"
-        if r.case.must_refuse and is_low:
-            hits += 1
-        elif not r.case.must_refuse and not is_low:
+        if r.case.must_refuse and is_low or not r.case.must_refuse and not is_low:
             hits += 1
     return hits / len(runs)
 

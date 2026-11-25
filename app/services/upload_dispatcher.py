@@ -156,9 +156,7 @@ def _run_inline(
         )
         repo.mark_completed(job_id, document_id=document_id)
         db.commit()
-        return JobEnqueuedResponse(
-            job_id=job_id, status="completed", document_id=document_id
-        )
+        return JobEnqueuedResponse(job_id=job_id, status="completed", document_id=document_id)
     except Exception as exc:
         db.rollback()
         repo.mark_failed(job_id, error=str(exc))

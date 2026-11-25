@@ -16,7 +16,6 @@ from app.api.dependencies.tenant import (
 from app.core.tenant_context import TenantContext, parse_role, parse_uuid
 from app.db.enums import TenantRole
 
-
 # ---- pure parsing helpers --------------------------------------------------
 
 
@@ -66,9 +65,7 @@ def test_admin_context_with_org_is_admin() -> None:
 
 def test_optional_dep_anonymous_when_no_org_header() -> None:
     ctx = asyncio.run(
-        get_optional_tenant_context(
-            x_organization_id=None, x_user_id=None, x_role=None
-        )
+        get_optional_tenant_context(x_organization_id=None, x_user_id=None, x_role=None)
     )
     assert ctx.is_anonymous
 
@@ -77,9 +74,7 @@ def test_optional_dep_builds_context_when_headers_present() -> None:
     org = uuid.uuid4()
     user = uuid.uuid4()
     ctx = asyncio.run(
-        get_optional_tenant_context(
-            x_organization_id=str(org), x_user_id=str(user), x_role="admin"
-        )
+        get_optional_tenant_context(x_organization_id=str(org), x_user_id=str(user), x_role="admin")
     )
     assert ctx.organization_id == org
     assert ctx.user_id == user
@@ -123,8 +118,6 @@ def test_admin_dep_accepts_owner_or_admin() -> None:
     user = uuid.uuid4()
     for role in ("admin", "owner"):
         ctx = asyncio.run(
-            require_admin(
-                x_organization_id=str(org), x_user_id=str(user), x_role=role
-            )
+            require_admin(x_organization_id=str(org), x_user_id=str(user), x_role=role)
         )
         assert ctx.is_admin

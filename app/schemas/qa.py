@@ -144,7 +144,9 @@ class AskRequest(BaseModel):
     # chat like any chat assistant; long text is clipped by the model's
     # context budget, not rejected with a 422.
     question: str = Field(..., min_length=1, max_length=20000)
-    session_id: str | None = Field(default=None, description="Optional chat session UUID for memory")
+    session_id: str | None = Field(
+        default=None, description="Optional chat session UUID for memory"
+    )
     # Optional on-screen context (e.g. the document open in the editor).
     # Sent separately from ``question`` so retrieval and memory key off the
     # user's actual words, and so long documents don't hit the question
@@ -175,9 +177,7 @@ class AskResponse(BaseModel):
     answer: str
     citations: list[Citation]
     confidence: Confidence
-    disclaimer: str = (
-        "This information is for educational purposes and not legal advice."
-    )
+    disclaimer: str = "This information is for educational purposes and not legal advice."
     # v2 additions
     sources_used: list[SourceUsed] = Field(default_factory=list)
     reasoning_summary: str = ""

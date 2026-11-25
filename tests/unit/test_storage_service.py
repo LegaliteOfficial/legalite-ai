@@ -34,27 +34,21 @@ def test_enabled_when_both_credentials_present() -> None:
 
 
 def test_build_key_global_scope() -> None:
-    s = StorageService(
-        base_url="https://x.supabase.co", service_key="k", bucket="b"
-    )
+    s = StorageService(base_url="https://x.supabase.co", service_key="k", bucket="b")
     doc_id = uuid.UUID("c49af58e-008f-41bd-9acb-118a5ca5e670")
     key = s.build_key(scope="global", document_id=doc_id, filename="Constitution.pdf")
     assert key == f"global/{doc_id}/Constitution.pdf"
 
 
 def test_build_key_tenant_scope_requires_org() -> None:
-    s = StorageService(
-        base_url="https://x.supabase.co", service_key="k", bucket="b"
-    )
+    s = StorageService(base_url="https://x.supabase.co", service_key="k", bucket="b")
     doc_id = uuid.uuid4()
     with pytest.raises(ValueError):
         s.build_key(scope="tenant", document_id=doc_id, filename="memo.pdf")
 
 
 def test_build_key_tenant_scope_includes_org() -> None:
-    s = StorageService(
-        base_url="https://x.supabase.co", service_key="k", bucket="b"
-    )
+    s = StorageService(base_url="https://x.supabase.co", service_key="k", bucket="b")
     doc_id = uuid.UUID("c49af58e-008f-41bd-9acb-118a5ca5e670")
     org_id = uuid.UUID("11111111-1111-1111-1111-111111111111")
     key = s.build_key(

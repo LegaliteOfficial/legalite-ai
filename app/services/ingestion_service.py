@@ -130,9 +130,7 @@ class IngestionService:
         try:
             parsed = self._parser.parse(storage_path)
             if doc_type == AUTO_DOC_TYPE:
-                classification = (self._classifier or DocumentClassifier()).classify(
-                    parsed, title
-                )
+                classification = (self._classifier or DocumentClassifier()).classify(parsed, title)
                 doc_type = classification.doc_type
                 document.doc_type = classification.doc_type
                 document.summary = classification.summary
@@ -245,9 +243,7 @@ class IngestionService:
             # would leak orphan objects on Postgres errors.
             if self._storage.enabled:
                 scope_label = (
-                    "tenant"
-                    if visibility_scope is VisibilityScope.TENANT_PRIVATE
-                    else "global"
+                    "tenant" if visibility_scope is VisibilityScope.TENANT_PRIVATE else "global"
                 )
                 remote_key = self._storage.build_key(
                     scope=scope_label,
@@ -368,9 +364,7 @@ class IngestionService:
                     resolver = CitationResolutionService(self._db)
                     resolver.resolve_for_case(case.id)
                 except Exception:
-                    logger.exception(
-                        "citation.resolution.failed", document_id=str(document_id)
-                    )
+                    logger.exception("citation.resolution.failed", document_id=str(document_id))
             logger.info(
                 "case.persisted",
                 document_id=str(document_id),
@@ -434,7 +428,5 @@ def _resolve_org_id(
     if visibility_scope is VisibilityScope.GLOBAL:
         return None
     if tenant is None or tenant.organization_id is None:
-        raise ValueError(
-            "TENANT_PRIVATE upload requires a tenant context with organization_id"
-        )
+        raise ValueError("TENANT_PRIVATE upload requires a tenant context with organization_id")
     return tenant.organization_id

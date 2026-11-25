@@ -158,7 +158,10 @@ READ_TOOLS: list[dict[str, Any]] = [
         "The user's invoices, optionally for one client or one status (e.g. unpaid / overdue).",
         {
             "client_id": _STR,
-            "status": {"type": "string", "description": "Optional status filter, e.g. Draft, Sent, Paid, Overdue."},
+            "status": {
+                "type": "string",
+                "description": "Optional status filter, e.g. Draft, Sent, Paid, Overdue.",
+            },
         },
         [],
     ),
@@ -205,8 +208,14 @@ READ_TOOLS: list[dict[str, Any]] = [
         "search_archive",
         "Search the firm's archive: past files the firm uploaded (pleadings, judgments, memos, opinions, contracts, letters, precedents), already read and summarised. Full-text search over their content, titles, parties and suit numbers.",
         {
-            "query": {"type": "string", "description": "Words to search for: party names, suit number, topic, statute, phrase."},
-            "document_type": {"type": "string", "description": "Optional filter, e.g. judgment, pleading, memo, legal_opinion, contract, letter."},
+            "query": {
+                "type": "string",
+                "description": "Words to search for: party names, suit number, topic, statute, phrase.",
+            },
+            "document_type": {
+                "type": "string",
+                "description": "Optional filter, e.g. judgment, pleading, memo, legal_opinion, contract, letter.",
+            },
         },
         ["query"],
     ),
@@ -334,7 +343,10 @@ WRITE_TOOLS: list[dict[str, Any]] = [
         "propose_case_update",
         "Propose editing an existing case: close or reopen it (status), rename it, change stage, type, court, suit number, opposing party, next court date, responsible/originating lawyer, description or notes, or move it to another client. Pass ONLY the fields that change. Shows the user a before/after card; nothing changes until they confirm.",
         {
-            "case_id": {"type": "string", "description": "case_id, case code, suit number or exact title"},
+            "case_id": {
+                "type": "string",
+                "description": "case_id, case code, suit number or exact title",
+            },
             "status": {"type": "string", "enum": ["Open", "Pending", "Closed"]},
             "title": _STR,
             "case_stage": _STR,
@@ -346,7 +358,10 @@ WRITE_TOOLS: list[dict[str, Any]] = [
             "assigned_lawyer": _STR,
             "originating_lawyer": _STR,
             "description": _STR,
-            "notes": {"type": "string", "description": "Replaces the case notes. To add a note, pass the existing notes plus the new text."},
+            "notes": {
+                "type": "string",
+                "description": "Replaces the case notes. To add a note, pass the existing notes plus the new text.",
+            },
             "client_id": {"type": "string", "description": "Move the case to this existing client"},
         },
         ["case_id"],
@@ -373,7 +388,11 @@ WRITE_TOOLS: list[dict[str, Any]] = [
         "Propose filing existing documents under a case (moves each document to that case). Get document ids from find_documents. Shows a confirmation card.",
         {
             "case_id": _STR,
-            "document_ids": {"type": "array", "items": {"type": "string"}, "description": "1 to 20 document ids"},
+            "document_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "1 to 20 document ids",
+            },
         },
         ["case_id", "document_ids"],
     ),
@@ -593,7 +612,10 @@ class WorkspaceToolkit:
         if not team:
             legacy = [
                 f"- {case[k]} ({label}, not on the firm roster)"
-                for k, label in (("assigned_lawyer", "responsible"), ("originating_lawyer", "originating"))
+                for k, label in (
+                    ("assigned_lawyer", "responsible"),
+                    ("originating_lawyer", "originating"),
+                )
                 if case.get(k)
             ]
             out.extend(legacy or ["- no one assigned"])
@@ -769,7 +791,9 @@ class WorkspaceToolkit:
             return ToolOutcome(f"No archived documents match '{query}'.", status)
         lines = []
         for e in hits:
-            bits = [f"- {e['title']} [archive_id={e['id']}] ({e.get('document_type') or 'document'})"]
+            bits = [
+                f"- {e['title']} [archive_id={e['id']}] ({e.get('document_type') or 'document'})"
+            ]
             meta = [
                 str(x)
                 for x in (
@@ -809,20 +833,40 @@ class WorkspaceToolkit:
         if len(text) > self._doc_max_chars:
             text = text[: self._doc_max_chars].rsplit(" ", 1)[0] + " … [truncated]"
         parts = [f"title: {e.get('title')}", f"type: {e.get('document_type')}"]
-        for key in ("court", "suit_number", "document_date", "case_title", "file_name", "page_count"):
+        for key in (
+            "court",
+            "suit_number",
+            "document_date",
+            "case_title",
+            "file_name",
+            "page_count",
+        ):
             if e.get(key):
                 parts.append(f"{key}: {e[key]}")
         if e.get("parties"):
-            parts.append("parties: " + "; ".join(f"{p['name']} ({p.get('role') or '-'})" for p in e["parties"]))
+            parts.append(
+                "parties: "
+                + "; ".join(f"{p['name']} ({p.get('role') or '-'})" for p in e["parties"])
+            )
         if e.get("summary"):
             parts.append(f"summary: {e['summary']}")
         for key, label in (("key_points", "key points"), ("legal_references", "references")):
             if e.get(key):
                 parts.append(f"{label}: " + "; ".join(e[key]))
         if e.get("key_dates"):
-            parts.append("dates: " + "; ".join(f"{d['date']} {d.get('description') or ''}".strip() for d in e["key_dates"]))
+            parts.append(
+                "dates: "
+                + "; ".join(
+                    f"{d['date']} {d.get('description') or ''}".strip() for d in e["key_dates"]
+                )
+            )
         if e.get("amounts"):
-            parts.append("amounts: " + "; ".join(f"{a['amount']} {a.get('description') or ''}".strip() for a in e["amounts"]))
+            parts.append(
+                "amounts: "
+                + "; ".join(
+                    f"{a['amount']} {a.get('description') or ''}".strip() for a in e["amounts"]
+                )
+            )
         notes = list(e.get("verification_notes") or [])
         if e.get("legibility") in ("partial", "poor"):
             notes.append(f"legibility: {e['legibility']}")
@@ -1046,7 +1090,9 @@ class WorkspaceToolkit:
             )
 
         if st := _opt(args, "status"):
-            match = next((x for x in ("Open", "Pending", "Closed") if x.lower() == st.lower()), None)
+            match = next(
+                (x for x in ("Open", "Pending", "Closed") if x.lower() == st.lower()), None
+            )
             if match is None:
                 raise ToolInputError("status must be Open, Pending or Closed")
             put("status", "Status", match)
@@ -1077,7 +1123,9 @@ class WorkspaceToolkit:
         if "next_court_date" in update and update["next_court_date"] is None:
             update["next_court_date"] = ""
         if list(update) == ["status"]:
-            verb = {"Closed": "Close", "Open": "Reopen", "Pending": "Mark pending"}[update["status"]]
+            verb = {"Closed": "Close", "Open": "Reopen", "Pending": "Mark pending"}[
+                update["status"]
+            ]
             summary = f"{verb} case “{title}”"
         else:
             summary = f"Update case “{title}”: " + ", ".join(c["label"].lower() for c in changes)
@@ -1114,7 +1162,11 @@ class WorkspaceToolkit:
             )
         summary = f"Update client “{name}”: " + ", ".join(c["label"].lower() for c in changes)
         return self._propose(
-            "update_client", summary, {"id": client["id"], "input": update}, {"client": name}, changes
+            "update_client",
+            summary,
+            {"id": client["id"], "input": update},
+            {"client": name},
+            changes,
         )
 
     def _t_propose_link_documents(self, args: dict[str, Any]) -> ToolOutcome:

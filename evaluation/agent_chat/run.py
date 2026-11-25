@@ -26,8 +26,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.tenant_context import TenantContext
 from app.core.config import get_settings
+from app.core.tenant_context import TenantContext
 from app.rag.chat_agent import AgentResult, AgentStatus, ChatAgent, ChatTurn, clean_history_text
 from app.rag.conversation_memory import ConversationSummarizer, build_memory_message
 from app.rag.legal_memory import LegalMemory
@@ -203,9 +203,7 @@ def main() -> int:
     RESULTS.mkdir(exist_ok=True)
     out_path = RESULTS / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.jsonl"
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(
-            pool.map(lambda sc: run_scenario(sc, agent, search, summarizer), scenarios)
-        )
+        results = list(pool.map(lambda sc: run_scenario(sc, agent, search, summarizer), scenarios))
     with out_path.open("w") as fh:
         for r in results:
             fh.write(json.dumps(r, ensure_ascii=False) + "\n")

@@ -65,17 +65,13 @@ def get_document_view(
 
     doc = db.get(LegalDocument, doc_uuid)
     if doc is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
 
     # Tenant gate. We treat "not visible to this caller" identically to
     # "doesn't exist" — never reveal existence across tenants.
     caller_org_id = tenant.organization_id if tenant else None
     if not _is_visible_to(doc, caller_org_id):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="document not found"
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
 
     # Chunks ordered by their natural document position. ``page_start``
     # is the primary key; ``start_char`` disambiguates within a page;

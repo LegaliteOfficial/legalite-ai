@@ -123,8 +123,14 @@ _OUTCOME_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("appeal dismissed", re.compile(r"\bappeal\s+(?:is\s+)?dismissed\b", re.IGNORECASE)),
     ("application granted", re.compile(r"\bapplication\s+(?:is\s+)?granted\b", re.IGNORECASE)),
     ("application dismissed", re.compile(r"\bapplication\s+(?:is\s+)?dismissed\b", re.IGNORECASE)),
-    ("judgment for plaintiff", re.compile(r"\bjudgment\s+(?:is\s+)?(?:entered\s+)?for\s+the\s+plaintiff\b", re.IGNORECASE)),
-    ("judgment for defendant", re.compile(r"\bjudgment\s+(?:is\s+)?(?:entered\s+)?for\s+the\s+defendant\b", re.IGNORECASE)),
+    (
+        "judgment for plaintiff",
+        re.compile(r"\bjudgment\s+(?:is\s+)?(?:entered\s+)?for\s+the\s+plaintiff\b", re.IGNORECASE),
+    ),
+    (
+        "judgment for defendant",
+        re.compile(r"\bjudgment\s+(?:is\s+)?(?:entered\s+)?for\s+the\s+defendant\b", re.IGNORECASE),
+    ),
     ("acquitted", re.compile(r"\bacquitted\b", re.IGNORECASE)),
     ("convicted", re.compile(r"\bconvicted\b", re.IGNORECASE)),
 ]
@@ -132,15 +138,38 @@ _OUTCOME_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # Shared topic vocabulary with the chunker. Keep this list as the canonical
 # legal-topic taxonomy so chunks and cases tag identically.
 _TOPIC_KEYWORDS: list[tuple[str, re.Pattern[str]]] = [
-    ("employment", re.compile(r"\b(employer|employee|dismissal|wages?|labou?r|maternity)\b", re.IGNORECASE)),
+    (
+        "employment",
+        re.compile(r"\b(employer|employee|dismissal|wages?|labou?r|maternity)\b", re.IGNORECASE),
+    ),
     ("landlord_tenant", re.compile(r"\b(landlord|tenant|tenancy|eviction|rent)\b", re.IGNORECASE)),
-    ("criminal", re.compile(r"\b(offen[cs]e|imprisonment|conviction|warrant|arrest|bail)\b", re.IGNORECASE)),
-    ("constitutional", re.compile(r"\b(fundamental\s+rights?|liberty|equality|due\s+process|article\s+\d+\s+of\s+the\s+Constitution)\b", re.IGNORECASE)),
+    (
+        "criminal",
+        re.compile(r"\b(offen[cs]e|imprisonment|conviction|warrant|arrest|bail)\b", re.IGNORECASE),
+    ),
+    (
+        "constitutional",
+        re.compile(
+            r"\b(fundamental\s+rights?|liberty|equality|due\s+process|article\s+\d+\s+of\s+the\s+Constitution)\b",
+            re.IGNORECASE,
+        ),
+    ),
     ("family", re.compile(r"\b(marriage|divorce|custody|guardian|matrimonial)\b", re.IGNORECASE)),
-    ("contract", re.compile(r"\b(contract|breach|consideration|offer|acceptance|repudiation)\b", re.IGNORECASE)),
-    ("property", re.compile(r"\b(conveyance|easement|deed|title|mortgage|land|trespass)\b", re.IGNORECASE)),
+    (
+        "contract",
+        re.compile(
+            r"\b(contract|breach|consideration|offer|acceptance|repudiation)\b", re.IGNORECASE
+        ),
+    ),
+    (
+        "property",
+        re.compile(r"\b(conveyance|easement|deed|title|mortgage|land|trespass)\b", re.IGNORECASE),
+    ),
     ("tort", re.compile(r"\b(negligence|nuisance|defamation|duty\s+of\s+care)\b", re.IGNORECASE)),
-    ("corporate", re.compile(r"\b(company|directors?|shareholders?|winding\s+up|corporate)\b", re.IGNORECASE)),
+    (
+        "corporate",
+        re.compile(r"\b(company|directors?|shareholders?|winding\s+up|corporate)\b", re.IGNORECASE),
+    ),
 ]
 
 
@@ -167,8 +196,7 @@ class CaseMetadataExtractor:
         if llm_enrichment_enabled is None:
             # Auto: on iff we have a real-looking API key (not the test sentinel).
             llm_enrichment_enabled = (
-                bool(settings.openai_api_key)
-                and settings.openai_api_key != "test-key"
+                bool(settings.openai_api_key) and settings.openai_api_key != "test-key"
             )
         self._llm_enrichment_enabled = llm_enrichment_enabled
         self._llm_client = llm_client
@@ -252,16 +280,14 @@ class CaseMetadataExtractor:
             re.IGNORECASE,
         )
         if anchor:
-            focus = text[anchor.end(): anchor.end() + 200]
+            focus = text[anchor.end() : anchor.end() + 200]
 
         for candidate in (focus, text):
             m = _DATE_LONG_RE.search(candidate)
             if m:
                 day, month, year = m.group(1), m.group(2), m.group(3)
                 try:
-                    return datetime.strptime(
-                        f"{day} {month} {year}", "%d %B %Y"
-                    ).date()
+                    return datetime.strptime(f"{day} {month} {year}", "%d %B %Y").date()
                 except ValueError:
                     pass
             m = _DATE_ISO_RE.search(candidate)
@@ -351,9 +377,7 @@ class CaseMetadataExtractor:
             logger.exception("case.llm_enrichment.client_init_failed")
             return
 
-        prompt = _ENRICHMENT_PROMPT.format(
-            text=_truncate(body_text, max_chars=12_000)
-        )
+        prompt = _ENRICHMENT_PROMPT.format(text=_truncate(body_text, max_chars=12_000))
         try:
             completion = client.chat.completions.create(
                 model=self._llm_model,
@@ -399,8 +423,8 @@ _ENRICHMENT_SYSTEM = (
 _ENRICHMENT_PROMPT = (
     "Extract two fields from the following judgment text.\n\n"
     "Return a strict JSON object with keys:\n"
-    "  - \"holding\": the legal principle the court decided, 1-3 sentences.\n"
-    "  - \"facts_summary\": the material facts, 2-4 sentences.\n\n"
+    '  - "holding": the legal principle the court decided, 1-3 sentences.\n'
+    '  - "facts_summary": the material facts, 2-4 sentences.\n\n'
     "Both must be drawn DIRECTLY from the text below. If you cannot find them,\n"
     "return an empty string for that field. Do not add commentary.\n\n"
     "TEXT:\n{text}"
@@ -420,7 +444,12 @@ def _clean_name(raw: str) -> str:
 def _clean_party(raw: str) -> str:
     s = re.sub(r"\s+", " ", raw).strip()
     # Drop leading noise like "BETWEEN:" or "PLAINTIFFS:".
-    s = re.sub(r"^(BETWEEN|PLAINTIFFS?|DEFENDANTS?|APPELLANTS?|RESPONDENTS?)[:\s]+", "", s, flags=re.IGNORECASE)
+    s = re.sub(
+        r"^(BETWEEN|PLAINTIFFS?|DEFENDANTS?|APPELLANTS?|RESPONDENTS?)[:\s]+",
+        "",
+        s,
+        flags=re.IGNORECASE,
+    )
     return s.strip(" .,;:'\"")[:256]
 
 

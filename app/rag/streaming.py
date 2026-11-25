@@ -38,7 +38,7 @@ class SSEEvent:
         # Multi-line data fields are NOT supported here intentionally —
         # JSON-encoding keeps the payload single-line and unambiguous.
         payload = json.dumps(self.data, ensure_ascii=False, default=str)
-        return f"event: {self.event}\ndata: {payload}\n\n".encode("utf-8")
+        return f"event: {self.event}\ndata: {payload}\n\n".encode()
 
 
 def encode_events(events: Iterable[SSEEvent]) -> bytes:

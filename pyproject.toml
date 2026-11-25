@@ -22,6 +22,17 @@ dev = [
 # ---------------------------------------------------------------------------
 # Ruff
 # ---------------------------------------------------------------------------
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# The repo root holds several top-level directories (app, evaluation,
+# tests, alembic); only app is the installable package. Without this,
+# setuptools' automatic discovery refuses the flat layout and
+# `pip install -e .` fails.
+[tool.setuptools.packages.find]
+include = ["app*"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
@@ -44,6 +55,12 @@ select = [
 ignore = [
     "S101", # allow assert in tests
     "B008", # FastAPI uses function calls in defaults (Depends, etc.)
+    "E501", # line length is enforced by `ruff format`; long strings/comments are left as written
+    # FastAPI and Pydantic resolve annotations at runtime, so moving imports
+    # into `if TYPE_CHECKING:` blocks breaks request parsing and models.
+    "TC001",
+    "TC002",
+    "TC003",
 ]
 
 [tool.ruff.lint.per-file-ignores]

@@ -96,15 +96,13 @@ class QueryRewriter:
     def __init__(
         self,
         *,
-        llm_client: "OpenAI | None" = None,
+        llm_client: OpenAI | None = None,
         enabled: bool | None = None,
         max_variants: int = 3,
         cache_size: int = 512,
     ) -> None:
         settings = get_settings()
-        self._enabled = (
-            enabled if enabled is not None else settings.query_rewriter_enabled
-        )
+        self._enabled = enabled if enabled is not None else settings.query_rewriter_enabled
         self._client = llm_client
         self._model = settings.openai_llm_model
         self._max_variants = max_variants
@@ -197,7 +195,7 @@ class QueryRewriter:
         )
         return clean
 
-    def _lazy_client(self) -> "OpenAI":
+    def _lazy_client(self) -> OpenAI:
         from openai import OpenAI as _OpenAI
 
         settings = get_settings()

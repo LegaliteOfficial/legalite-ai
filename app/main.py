@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -26,7 +26,7 @@ from app.api.routes import (
 from app.core.config import get_settings
 from app.core.logging import configure_logging, get_logger
 from app.core.observability import ObservabilityMiddleware
-from app.core.rate_limit import configure_rate_limiting, limiter
+from app.core.rate_limit import configure_rate_limiting
 from app.core.service_auth import signature_required
 
 

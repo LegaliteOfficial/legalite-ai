@@ -40,9 +40,7 @@ async def list_cases(
     service: CaseIntelligenceService = Depends(get_case_intelligence_service),
     tenant: TenantContext = Depends(get_optional_tenant_context),
 ) -> CaseListResponse:
-    return service.list_cases(
-        court=court, topic=topic, limit=limit, offset=offset, tenant=tenant
-    )
+    return service.list_cases(court=court, topic=topic, limit=limit, offset=offset, tenant=tenant)
 
 
 @router.get("/{case_id}", response_model=CaseDetailOut)

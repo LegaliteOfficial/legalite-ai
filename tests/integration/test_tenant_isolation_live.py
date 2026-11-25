@@ -31,7 +31,6 @@ from app.db.enums import (
 from app.rag.hybrid_retriever import HybridRetriever
 from app.services.ingestion_service import IngestionService
 
-
 _FIRM_A_MARKER = "FIRM-A-CONFIDENTIAL-MARKER-7F3A-INTEGRATION"
 _FIRM_B_MARKER = "FIRM-B-INTERNAL-MARKER-4A11-INTEGRATION"
 

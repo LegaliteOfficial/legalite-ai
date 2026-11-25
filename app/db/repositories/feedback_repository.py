@@ -54,9 +54,7 @@ class FeedbackRepository:
         if thumbs not in ("up", "down"):
             raise ValueError(f"thumbs must be 'up' or 'down', got {thumbs!r}")
 
-        assistant_msg = self.get_message_for_tenant(
-            message_id, organization_id=organization_id
-        )
+        assistant_msg = self.get_message_for_tenant(message_id, organization_id=organization_id)
         if assistant_msg is None:
             raise LookupError("message not found in caller's tenant scope")
         if assistant_msg.role != "assistant":
@@ -133,9 +131,7 @@ class FeedbackRepository:
         """Most recent feedback for a tenant (NULL = anonymous bucket)."""
         stmt = (
             select(QueryFeedback)
-            .where(
-                QueryFeedback.organization_id.is_not_distinct_from(organization_id)
-            )
+            .where(QueryFeedback.organization_id.is_not_distinct_from(organization_id))
             .order_by(desc(QueryFeedback.created_at))
             .limit(limit)
         )
@@ -157,13 +153,9 @@ class FeedbackRepository:
                 QueryFeedback.query_intent,
                 func.count().filter(thumbs_col == "up").label("up_count"),
                 func.count().filter(thumbs_col == "down").label("down_count"),
-                func.count()
-                .filter(QueryFeedback.refused.is_(True))
-                .label("refused_count"),
+                func.count().filter(QueryFeedback.refused.is_(True)).label("refused_count"),
             )
-            .where(
-                QueryFeedback.organization_id.is_not_distinct_from(organization_id)
-            )
+            .where(QueryFeedback.organization_id.is_not_distinct_from(organization_id))
             .group_by(QueryFeedback.query_intent)
             .order_by(desc("down_count"))
         )

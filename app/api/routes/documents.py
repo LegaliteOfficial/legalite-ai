@@ -199,9 +199,7 @@ async def upload_law_bulk(
                 upload, max_upload_mb=settings.max_upload_mb
             )
         except _BulkRejected as exc:
-            rejected.append(
-                BulkUploadRejection(filename=filename, reason=exc.reason)
-            )
+            rejected.append(BulkUploadRejection(filename=filename, reason=exc.reason))
             continue
         prepared.append((filename, title, content))
 
@@ -217,9 +215,7 @@ async def upload_law_bulk(
     # it, so its duplicates are matched on title alone.
     dedup_doc_type = None if auto_classify else doc_type_clean
     existing_docs = doc_repo.find_global_by_titles(candidate_titles, dedup_doc_type)
-    in_flight_jobs = job_repo.find_in_flight_global_by_titles(
-        candidate_titles, dedup_doc_type
-    )
+    in_flight_jobs = job_repo.find_in_flight_global_by_titles(candidate_titles, dedup_doc_type)
 
     # Stage 3 — enqueue or skip. ``seen_in_batch`` catches the case
     # where the SAME bulk request contains the same title twice (the
@@ -338,7 +334,7 @@ async def upload_law_bulk(
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
-class _BulkRejected(Exception):
+class _BulkRejected(Exception):  # noqa: N818 - internal sentinel, not a public error type
     """Internal sentinel — a single file failed validation cleanly.
 
     Carries the user-facing reason so the route handler can append a
@@ -377,9 +373,7 @@ async def _validate_and_extract_title(
         raise _BulkRejected("File is empty.")
     size_mb = len(content) / (1024 * 1024)
     if size_mb > max_upload_mb:
-        raise _BulkRejected(
-            f"File exceeds {max_upload_mb} MB limit ({size_mb:.1f} MB)."
-        )
+        raise _BulkRejected(f"File exceeds {max_upload_mb} MB limit ({size_mb:.1f} MB).")
 
     title = _filename_to_title(upload.filename)
     if len(title) < _TITLE_MIN_LENGTH:

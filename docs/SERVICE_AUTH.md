@@ -174,13 +174,16 @@ signature both ways:
 ```python
 # Python side
 from app.core.service_auth import compute_signature
-print(compute_signature(
-    timestamp=1730000000,
-    organization_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-    user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
-    role="lawyer",
-    secret="test-secret",
-))
+
+print(
+    compute_signature(
+        timestamp=1730000000,
+        organization_id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        user_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        role="lawyer",
+        secret="test-secret",
+    )
+)
 ```
 
 ```typescript
