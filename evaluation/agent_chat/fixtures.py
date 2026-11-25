@@ -240,6 +240,73 @@ DOCUMENTS = [
 ]
 
 
+ARCHIVE: list[dict[str, Any]] = [
+    {
+        "id": "arc-1",
+        "title": "Judgment - Boateng v Agyei (Suit No. LD/0412/2019)",
+        "document_type": "judgment",
+        "status": "ready",
+        "summary": "High Court (Land Division), Accra, declared the plaintiff owner of Plot 14, East Legon, after finding the defendant's earlier sale void for want of the head of family's consent. Awarded GH₵ 40,000 general damages for trespass and an order of recovery of possession.",
+        "key_points": [
+            "Sale of family land without the head of family's consent is void, not merely voidable",
+            "Registration does not cure a void title (Land Act, 2020 (Act 1036))",
+            "General damages for trespass GH₵ 40,000",
+        ],
+        "court": "High Court (Land Division), Accra",
+        "suit_number": "LD/0412/2019",
+        "document_date": "2021-06-18",
+        "case_id": None,
+        "case_title": None,
+        "tags": ["land", "family land", "trespass", "head of family consent"],
+        "legal_references": [
+            "Land Act, 2020 (Act 1036)",
+            "Agyei Osae v Adjeifio [2007-2008] SCGLR 499",
+        ],
+        "verification_notes": ["Last page (signature page) is missing from the upload."],
+        "legibility": "good",
+        "completeness": "partial",
+        "file_name": "boateng_v_agyei_judgment.pdf",
+        "page_count": 11,
+        "parties": [
+            {"name": "Kwame Boateng", "role": "plaintiff"},
+            {"name": "Yaw Agyei", "role": "defendant"},
+        ],
+        "key_dates": [{"date": "2021-06-18", "description": "judgment delivered"}],
+        "amounts": [{"amount": "GH₵ 40,000", "description": "general damages for trespass"}],
+        "content": "IN THE SUPERIOR COURT OF JUDICATURE, IN THE HIGH COURT OF JUSTICE (LAND DIVISION), ACCRA ... The purported sale by the defendant without the consent of the head of family is void ... Judgment for the plaintiff ... general damages of GH₵ 40,000 ...",
+        "created_at": "2026-10-02T10:00:00Z",
+    },
+    {
+        "id": "arc-2",
+        "title": "Memo - Limitation for recovery of land",
+        "document_type": "memo",
+        "status": "ready",
+        "summary": "Internal memo by Ama Owusu advising that actions to recover land are barred after 12 years under section 10 of the Limitation Act, 1972 (NRCD 54), and that time runs from dispossession.",
+        "key_points": [
+            "12-year limitation for recovery of land (s.10 NRCD 54)",
+            "Time runs from dispossession or discontinuance",
+        ],
+        "court": None,
+        "suit_number": None,
+        "document_date": "2025-03-04",
+        "case_id": None,
+        "case_title": None,
+        "tags": ["limitation", "land"],
+        "legal_references": ["Limitation Act, 1972 (NRCD 54), s.10"],
+        "verification_notes": [],
+        "legibility": "good",
+        "completeness": "complete",
+        "file_name": "limitation_memo.docx",
+        "page_count": None,
+        "parties": [{"name": "Ama Owusu", "role": "author"}],
+        "key_dates": [],
+        "amounts": [],
+        "content": "MEMO. To: Litigation team. From: Ama Owusu. Re: Limitation for recovery of land. Section 10 of the Limitation Act, 1972 (NRCD 54) bars an action to recover land after twelve years from the date on which the right of action accrued ...",
+        "created_at": "2026-10-05T10:00:00Z",
+    },
+]
+
+
 class FakeWorkspaceClient:
     """Stand-in for :class:`WorkspaceClient` backed by the fixtures above."""
 
@@ -300,6 +367,28 @@ class FakeWorkspaceClient:
     def document(self, document_id: str) -> dict[str, Any] | None:
         self.calls.append("document")
         return next((d for d in DOCUMENTS if d["id"] == document_id), None)
+
+    def archive(
+        self, *, search: str | None = None, document_type: str | None = None, limit: int = 25
+    ) -> list[dict[str, Any]]:
+        self.calls.append("archive")
+        words = [w for w in (search or "").lower().split() if len(w) > 2]
+
+        def hit(e: dict[str, Any]) -> bool:
+            blob = " ".join(
+                str(e.get(k) or "") for k in ("title", "summary", "content", "suit_number", "tags")
+            ).lower()
+            return not words or any(w in blob for w in words)
+
+        return [
+            {k: v for k, v in e.items() if k != "content"}
+            for e in ARCHIVE
+            if hit(e) and document_type in (None, e["document_type"])
+        ][:limit]
+
+    def archive_entry(self, entry_id: str) -> dict[str, Any] | None:
+        self.calls.append("archive_entry")
+        return next((e for e in ARCHIVE if e["id"] == entry_id), None)
 
     def overview(self) -> dict[str, Any]:
         self.calls.append("overview")

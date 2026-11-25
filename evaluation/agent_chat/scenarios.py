@@ -191,6 +191,39 @@ S: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "archive-precedent",
+        "cat": "ws-archive",
+        "signed_in": True,
+        "turns": [
+            "have we handled a family land case where the head of family didn't consent to the sale?"
+        ],
+        "checks": {
+            "tools_any": ["search_archive", "read_archive_entry"],
+            "must_match": r"Boateng|LD/0412/2019",
+        },
+    },
+    {
+        "id": "archive-read-notes",
+        "cat": "ws-archive",
+        "signed_in": True,
+        "turns": ["what did the judgment in Boateng v Agyei award, and can I rely on our copy?"],
+        "checks": {
+            "tools_any": ["read_archive_entry"],
+            "must_match": r"40,000",
+            "must_match_2": r"missing|incomplete|signature",
+        },
+    },
+    {
+        "id": "archive-memo",
+        "cat": "ws-archive",
+        "signed_in": True,
+        "turns": ["find our memo on limitation for recovering land"],
+        "checks": {
+            "tools_any": ["search_archive"],
+            "must_match": r"12|twelve",
+        },
+    },
+    {
         "id": "summarise-defence",
         "cat": "ws-read",
         "signed_in": True,

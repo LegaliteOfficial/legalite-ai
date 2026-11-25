@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import (
     admin,
+    archive,
     cases,
     document_view,
     documents,
@@ -116,6 +117,7 @@ def create_app() -> FastAPI:
     app.include_router(cases.router)
     app.include_router(admin.router)
     app.include_router(private_documents.router)
+    app.include_router(archive.router)
     app.include_router(jobs.router)
     app.include_router(metrics.router)
     return app

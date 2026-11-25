@@ -179,6 +179,8 @@ def check(checks: dict[str, Any], turn: dict[str, Any]) -> list[str]:
         fails.append(f"unexpected proposals {ptypes}")
     if (rx := checks.get("must_match")) and not re.search(rx, answer, re.I):
         fails.append(f"answer lacks /{rx}/")
+    if (rx := checks.get("must_match_2")) and not re.search(rx, answer, re.I):
+        fails.append(f"answer lacks /{rx}/")
     if (rx := checks.get("must_not_match")) and (m := re.search(rx, answer, re.I)):
         fails.append(f"answer contains forbidden '{m.group(0)}'")
     if (n := checks.get("max_chars")) and len(answer) > n:
