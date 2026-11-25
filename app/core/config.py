@@ -166,6 +166,17 @@ class Settings(BaseSettings):
     # Max characters of a stored document's text shown to the model.
     agent_workspace_document_max_chars: int = 12000
 
+    # Firm archive (POST /archive/analyze): the backend sends each uploaded
+    # file here to be read, verified and described. Models default to the
+    # agent model; the vision model must accept images (gpt-4o does).
+    archive_llm_model: str | None = None
+    archive_vision_model: str | None = None
+    # Scanned pages transcribed by the vision model per document.
+    archive_vision_max_pages: int = 12
+    # Text archived per document, and text the analysis call reads.
+    archive_content_max_chars: int = 400_000
+    archive_analysis_max_chars: int = 48_000
+
     # Observability
     prometheus_enabled: bool = True
     otel_enabled: bool = False

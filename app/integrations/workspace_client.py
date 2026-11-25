@@ -124,6 +124,28 @@ query AgentInvoices {
 
 _ACCESS_QUERY = "query AgentWorkspaceAccess { aiWorkspaceAccess { mode } }"
 
+_ARCHIVE_SEARCH_QUERY = """
+query AgentArchive($search: String, $documentType: String, $limit: Int) {
+  archiveEntries(search: $search, documentType: $documentType, limit: $limit) {
+    id title document_type status summary suit_number court document_date
+    case_id case_title tags file_name created_at
+  }
+}
+"""
+
+_ARCHIVE_ENTRY_QUERY = """
+query AgentArchiveEntry($id: ID!) {
+  archiveEntry(id: $id) {
+    id title document_type status summary key_points court suit_number
+    document_date case_title tags legal_references verification_notes
+    legibility completeness file_name page_count content
+    parties { name role }
+    key_dates { date description }
+    amounts { amount description }
+  }
+}
+"""
+
 _OVERVIEW_QUERY = """
 query AgentOverview {
   dashboardStats {
@@ -244,6 +266,18 @@ class WorkspaceClient:
             logger.info("workspace.access_unavailable", reason=str(exc))
             return "ask"
         return mode if mode in ("ask", "always", "never") else "ask"
+
+    def archive(
+        self, *, search: str | None = None, document_type: str | None = None, limit: int = 25
+    ) -> list[dict[str, Any]]:
+        data = self.query(
+            _ARCHIVE_SEARCH_QUERY,
+            {"search": search, "documentType": document_type, "limit": limit},
+        )
+        return list(data.get("archiveEntries") or [])
+
+    def archive_entry(self, entry_id: str) -> dict[str, Any] | None:
+        return self.query(_ARCHIVE_ENTRY_QUERY, {"id": entry_id}).get("archiveEntry")
 
     def overview(self) -> dict[str, Any]:
         return self.query(_OVERVIEW_QUERY).get("dashboardStats") or {}

@@ -472,6 +472,9 @@ class ChatAgent:
         passages: list[RetrievedPassage] = []
         seen_keys: dict[str, int] = {}
         tool_records: list[ToolCallRecord] = []
+        # Text read from the user's own records this turn (archive entries,
+        # documents, cases): counts as a source for the reference check.
+        workspace_texts: list[str] = []
         proposals: list[ProposedAction] = []
         tokens_in = tokens_out = 0
         answer_parts: list[str] = []
@@ -624,6 +627,7 @@ class ChatAgent:
                         proposals.append(outcome.proposal)
                         yield AgentStatus(kind="action", action=outcome.proposal)
                     content = outcome.content
+                    workspace_texts.append(content)
                 else:
                     content = f"Unknown tool '{c['name']}'. Answer without it."
                 messages.append({"role": "tool", "tool_call_id": c["id"], "content": content})
@@ -636,12 +640,14 @@ class ChatAgent:
         used_library = any(r.name == SEARCH_TOOL for r in tool_records)
         unverified: list[str] = []
         if answer and used_library:
-            unverified = unsupported_references(answer, passages, question)
+            unverified = unsupported_references(
+                answer, passages, question, "\n".join(workspace_texts)
+            )
             if unverified:
                 answer += (
                     "\n\n**Check before relying on:** "
                     + "; ".join(unverified)
-                    + ". These were not in the library passages found for this answer."
+                    + ". These were not in the sources found for this answer."
                 )
         if answer and truncated:
             answer += "\n\n*The answer reached its length limit. Ask me to continue for the rest.*"
@@ -930,16 +936,21 @@ def _norm(text: str) -> str:
 
 
 def unsupported_references(
-    answer: str, passages: list[RetrievedPassage], question: str = ""
+    answer: str,
+    passages: list[RetrievedPassage],
+    question: str = "",
+    extra_sources: str = "",
 ) -> list[str]:
     """Sections, articles and cases named in the answer that appear in no
     retrieved passage (text or labels) and were not given by the user.
+    ``extra_sources`` is other text the agent read this turn (the firm's own
+    archived documents and records), which also counts as support.
 
     Deliberately conservative: a section number counts as supported if any
     passage mentions it, whatever the Act. The point is to catch numbers
     and cases the model supplied from memory, not to judge the law.
     """
-    corpus = "\n".join(p.content for p in passages)
+    corpus = "\n".join([*(p.content for p in passages), extra_sources])
     corpus_words = set(_norm(corpus + " " + " ".join(passage_header(p) for p in passages)).split())
     labels_s = {p.section for p in passages if p.section}
     labels_a = {p.article for p in passages if p.article}

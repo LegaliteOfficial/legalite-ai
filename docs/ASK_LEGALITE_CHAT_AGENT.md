@@ -152,6 +152,54 @@ Live scenarios: `recall-*` and `infer-*` in `evaluation/agent_chat/scenarios.py`
 (`recall-long-chat` forces a 3-turn window to exercise the summary + outline).
 Tests: `tests/unit/test_conversation_memory.py`.
 
+## Firm archive (v7): uploaded documents become searchable firm knowledge
+
+When a member uploads a file to the Legal Library, the backend calls
+`POST /archive/analyze` (`app/api/routes/archive.py`). This service does not
+store anything for this flow; the backend keeps the result in
+`firm_archive_entries`.
+
+`ArchiveAnalyzer` (`app/services/archive_analyzer.py`) handles each file in
+two steps.
+
+1. **Extract the text.**
+   - PDF: the text layer, then Tesseract OCR when it is installed, then the
+     vision model for pages that are still unreadable (up to
+     `ARCHIVE_VISION_MAX_PAGES`).
+   - Word (.docx): paragraphs and tables.
+   - EPUB: chapters in reading order.
+   - TXT, Markdown and HTML.
+   - Images: transcribed by the vision model.
+   - Old `.doc` files and other formats are refused with a clear message.
+2. **Verify and describe it** in one JSON-mode call:
+   - type, title and summary;
+   - key points;
+   - parties, court and suit number;
+   - document date, key dates and amounts;
+   - legal references and tags;
+   - legibility, completeness, verification notes and a confidence score.
+
+   The output is normalised: unknown types become "other", non-ISO dates are
+   dropped, and lists are capped. Text read from scans carries a warning to
+   check names and figures against the original.
+
+Long documents are sampled (head and tail, `ARCHIVE_ANALYSIS_MAX_CHARS`) for
+the analysis. Up to `ARCHIVE_CONTENT_MAX_CHARS` of their text is archived.
+
+The endpoint requires tenant headers, signed when `LEGALITE_GATEWAY_SECRET`
+is set.
+
+The agent reads the archive through two workspace tools:
+
+- `search_archive`: GraphQL `archiveEntries(search)`, Postgres full-text
+  search over content, titles, parties and suit numbers.
+- `read_archive_entry`: the summary, facts, verification notes and the text
+  (capped at `AGENT_WORKSPACE_DOCUMENT_MAX_CHARS`).
+
+The prompt tells the agent to cite archived documents by title and to raise
+their verification notes before relying on them. The live scenarios are
+`archive-*`, and the tests are in `tests/unit/test_archive.py`.
+
 ## Scaling the intelligence further — prioritised roadmap
 
 Ordered by impact ÷ effort. Each item is independent.
@@ -231,6 +279,11 @@ Ordered by impact ÷ effort. Each item is independent.
 | `AGENT_WORKSPACE_TOOLS_ENABLED` | true | kill switch for workspace tools |
 | `AGENT_WORKSPACE_MAX_TOOL_ROUNDS` | 6 | tool rounds when workspace tools are active |
 | `WORKSPACE_REQUEST_TIMEOUT_SECONDS` | 10 | per GraphQL call |
+| `ARCHIVE_LLM_MODEL` | agent model | archive analysis model |
+| `ARCHIVE_VISION_MODEL` | analysis model | transcribes scans/images (must accept images) |
+| `ARCHIVE_VISION_MAX_PAGES` | 12 | scanned pages transcribed per document |
+| `ARCHIVE_CONTENT_MAX_CHARS` | 400000 | text archived per document |
+| `ARCHIVE_ANALYSIS_MAX_CHARS` | 48000 | text the analysis call reads |
 
 Tests: `tests/unit/test_chat_agent.py` (fake streaming OpenAI client — tool
 calls, citation validation, loop bound, dedup, QAService contract, fallback).

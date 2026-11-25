@@ -72,3 +72,10 @@ def test_references_from_the_question_are_not_flagged() -> None:
     q = "Is Mensah v Boateng still good law on section 12?"
     flagged = unsupported_references("Mensah v Boateng applied section 12.", [_p("unrelated text")], q)
     assert flagged == []
+
+
+def test_references_found_in_the_firms_own_records_are_not_flagged() -> None:
+    answer = "Our memo relies on section 10 of NRCD 54 and Boateng v Agyei."
+    archived = "Section 10 of the Limitation Act bars recovery. See Boateng v Agyei."
+    assert unsupported_references(answer, [_p("unrelated text")], "") != []
+    assert unsupported_references(answer, [_p("unrelated text")], "", archived) == []

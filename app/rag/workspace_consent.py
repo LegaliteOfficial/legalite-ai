@@ -167,6 +167,10 @@ def describe_tool_call(name: str, args: dict[str, Any]) -> str:
             return f"Search your documents for “{q}”" if q else "List your documents"
         case "read_document":
             return "Read the text of one of your documents"
+        case "search_archive":
+            return f"Search the firm archive for “{q}”" if q else "Search the firm archive"
+        case "read_archive_entry":
+            return "Read one document from the firm archive"
         case "list_invoices":
             return "Read your invoices"
         case _ if name.startswith("propose_"):
